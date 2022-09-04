@@ -21,7 +21,7 @@ import {l, s} from "../misc/languages.js";
 import {MessageActionRow, MessageButton} from "discord.js";
 import {getStatsFor} from "../misc/stats.js";
 import {getUser} from "../valorant/auth.js";
-import {readUserJson, saveUser} from "../valorant/accountSwitcher.js";
+import {readUserJson, removeDupeAccounts, saveUser} from "../valorant/accountSwitcher.js";
 import {getSetting, humanifyValue, settingName} from "../misc/settings.js";
 import {VPEmoji} from "./emoji.js";
 
@@ -43,15 +43,15 @@ const thumbnails = [
     "https://media.valorant-api.com/sprays/40ff9251-4c11-b729-1f27-088ee032e7ce/fulltransparenticon.png"
 ];
 
-export const authFailureMessage = (interaction, authResponse, message="AUTH_ERROR", hideEmail=false) => {
+export const authFailureMessage = (interaction, authResponse, message="AUTH_ERROR", isEphemeral=false) => {
     let embed;
 
     if(authResponse.maintenance) embed = basicEmbed(s(interaction).error.MAINTENANCE);
     else if(authResponse.mfa) {
         console.log(`${interaction.user.tag} needs 2FA code`);
         if(authResponse.method === "email") {
-            if(hideEmail) embed = basicEmbed(s(interaction).info.MFA_EMAIL_HIDDEN);
-            else embed = basicEmbed(s(interaction).info.MFA_EMAIL.f({e: escapeMarkdown(authResponse.email)}));
+            if(isEphemeral) embed = basicEmbed(s(interaction).info.MFA_EMAIL.f({e: escapeMarkdown(authResponse.email)}));
+            else embed = basicEmbed(s(interaction).info.MFA_EMAIL_HIDDEN);
         }
         else embed = basicEmbed(s(interaction).info.MFA_GENERIC);
     }
@@ -458,6 +458,10 @@ const Weapons = {
 }
 
 export const skinCollectionSingleEmbed = async (interaction, id, user, loadout) => {
+    const someoneElseUsedCommand = interaction.message ?
+        interaction.message.interaction && interaction.message.interaction.user.id !== user.id :
+        interaction.user.id !== user.id;
+
     let totalValue = 0;
 
     const createField = async (weaponUuid, inline=true) => {
@@ -512,16 +516,24 @@ export const skinCollectionSingleEmbed = async (interaction, id, user, loadout) 
         inline: true
     }, emptyField);
 
+    let usernameText;
+    if(someoneElseUsedCommand) {
+        usernameText = `<@${id}>`;
+
+        const json = readUserJson(id);
+        if(json.accounts.length > 1) usernameText += ' ' + s(interaction).info.SWITCH_ACCOUNT_BUTTON.f({n: json.currentAccount});
+    }
+    else usernameText = user.username;
+
+
     const embed = {
-        description: s(interaction).info.COLLECTION_HEADER.f({u: user.username}, id),
+        description: s(interaction).info.COLLECTION_HEADER.f({u: usernameText}, id),
         color: VAL_COLOR_1,
         fields: fields
     }
 
-    const components = [
-        new MessageActionRow().addComponents(collectionSwitchEmbedButton(interaction, true, id)),
-        ...switchAccountButtons(interaction, "cl", false, id)
-    ]
+    const components = [new MessageActionRow().addComponents(collectionSwitchEmbedButton(interaction, true, id)),]
+    if(!someoneElseUsedCommand) components.push(...switchAccountButtons(interaction, "cl", false, id))
 
     return {
         embeds: [embed],
@@ -530,6 +542,10 @@ export const skinCollectionSingleEmbed = async (interaction, id, user, loadout) 
 }
 
 export const skinCollectionPageEmbed = async (interaction, id, user, loadout, pageIndex=0) => {
+    const someoneElseUsedCommand = interaction.message ?
+        interaction.message.interaction && interaction.message.interaction.user.id !== user.id :
+        interaction.user.id !== user.id;
+
     let totalValue = 0;
     const emoji = await VPEmoji(interaction);
 
@@ -560,7 +576,16 @@ export const skinCollectionPageEmbed = async (interaction, id, user, loadout, pa
     if(pageIndex < 0) pageIndex = pages.length - 1;
     if(pageIndex >= pages.length) pageIndex = 0;
 
-    const embeds = [basicEmbed(s(interaction).info.COLLECTION_HEADER.f({u: user.username}, id))];
+    let usernameText;
+    if(someoneElseUsedCommand) {
+        usernameText = `<@${id}>`;
+
+        const json = readUserJson(id);
+        if(json.accounts.length > 1) usernameText += ' ' + s(interaction).info.SWITCH_ACCOUNT_BUTTON.f({n: json.currentAccount});
+    }
+    else usernameText = user.username;
+
+    const embeds = [basicEmbed(s(interaction).info.COLLECTION_HEADER.f({u: usernameText}, id))];
     for(const weapon of pages[pageIndex]) {
         embeds.push(await createEmbed(weapon));
     }
@@ -568,16 +593,16 @@ export const skinCollectionPageEmbed = async (interaction, id, user, loadout, pa
     const firstRowButtons = [collectionSwitchEmbedButton(interaction, false, id)];
     firstRowButtons.push(...(pageButtons("clpage", id, pageIndex, pages.length).components))
 
-    const components = [
-        new MessageActionRow().setComponents(...firstRowButtons),
-        ...switchAccountButtons(interaction, "cl", false, id)
-    ]
+    const components = [new MessageActionRow().setComponents(...firstRowButtons)]
+    if(!someoneElseUsedCommand) components.push(...switchAccountButtons(interaction, "cl", false, id));
 
     return {embeds, components}
 }
 
 const collectionSwitchEmbedButton = (interaction, switchToPage, id) => {
-    return new MessageButton().setEmoji('🔀').setLabel(s(interaction).info.SWITCH_DESIGN_BUTTON).setStyle("PRIMARY").setCustomId(`clswitch/${switchToPage ? "p" : "s"}/${id}`);
+    const label = s(interaction).info[switchToPage ? "COLLECTION_VIEW_IMAGES" : "COLLECTION_VIEW_ALL"];
+    const customId = `clswitch/${switchToPage ? "p" : "s"}/${id}`;
+    return new MessageButton().setEmoji('🔍').setLabel(label).setStyle("PRIMARY").setCustomId(customId);
 }
 
 export const botInfoEmbed = (interaction, client, guildCount, userCount, registeredUserCount, ownerString, status) => {
@@ -658,7 +683,7 @@ const pageButtons = (pageId, userId, current, max) => {
 }
 
 export const switchAccountButtons = (interaction, customId, oneAccountButton=false, id=interaction.user.id) => {
-    const json = readUserJson(id);
+    const json = removeDupeAccounts(id);
     if(!json || json.accounts.length === 1 && !oneAccountButton) return [];
     const accountNumbers = [...Array(json.accounts.length).keys()].map(n => n + 1).slice(0, 5);
     const hideIgn = getSetting(id, "hideIgn");

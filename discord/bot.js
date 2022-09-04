@@ -47,7 +47,7 @@ import {
     valNamesToDiscordNames,
     wait
 } from "../misc/util.js";
-import config, {saveConfig} from "../misc/config.js";
+import config, {loadConfig, saveConfig} from "../misc/config.js";
 import {sendConsoleOutput} from "../misc/logger.js";
 import {DEFAULT_VALORANT_LANG, discToValLang, l, s} from "../misc/languages.js";
 import {
@@ -244,6 +244,12 @@ const commands = [
     {
         name: "collection",
         description: "Show off your skin collection!",
+        options: [{
+            type: "USER",
+            name: "user",
+            description: "Optional: see someone else's collection!",
+            required: false
+        }]
     },
     {
         name: "battlepass",
@@ -349,6 +355,22 @@ client.on("messageCreate", async (message) => {
                 if(config.token !== oldToken)
                     s += "\nI noticed you changed the token. You'll have to restart the bot for that to happen."
                 await message.reply(s);
+            } else if(splits[1] === "load") {
+                const oldToken = config.token;
+
+                loadConfig();
+                destroyTasks();
+                scheduleTasks();
+
+                if(client.shard) sendShardMessage({type: "configReload"});
+
+                let s = "Successfully reloaded the config from disk!";
+                if(config.token !== oldToken)
+                    s += "\nI noticed you changed the token. You'll have to restart the bot for that to happen."
+                await message.reply(s);
+            } else if(splits[1] === "read") {
+                const s = "Here is the config.json the bot currently has loaded:```json\n" + JSON.stringify({...config, token: "[redacted]"}, null, 2) + "```";
+                await message.reply(s);
             } else {
                 const target = splits[1];
                 const value = splits.slice(2).join(' ');
@@ -446,7 +468,7 @@ client.on("interactionCreate", async (interaction) => {
             switch (interaction.commandName) {
                 case "skins":
                 case "shop": {
-                    let targetId = interaction.user.id;
+                    let targetUser = interaction.user;
 
                     const otherUser = interaction.options.getUser("user");
                     if(otherUser && otherUser.id !== interaction.user.id) {
@@ -459,7 +481,7 @@ client.on("interactionCreate", async (interaction) => {
                             embeds: [basicEmbed(s(interaction).error.OTHER_SHOP_DISABLED.f({u: `<@${otherUser.id}>`}))]
                         });
 
-                        targetId = otherUser.id;
+                        targetUser = otherUser;
                     }
                     else if(!valorantUser) return await interaction.reply({
                         embeds: [basicEmbed(s(interaction).error.NOT_REGISTERED)],
@@ -468,10 +490,10 @@ client.on("interactionCreate", async (interaction) => {
 
                     await defer(interaction);
 
-                    const message = await fetchShop(interaction, valorantUser, targetId);
+                    const message = await fetchShop(interaction, valorantUser, targetUser.id);
                     await interaction.followUp(message);
 
-                    console.log(`Sent ${interaction.user.tag}'s shop!`); // also logged if maintenance/login failed
+                    console.log(`Sent ${targetUser.tag}'s shop!`); // also logged if maintenance/login failed
 
                     break;
                 }
@@ -792,17 +814,32 @@ client.on("interactionCreate", async (interaction) => {
                     break;
                 }
                 case "collection": {
-                    if(!valorantUser) return await interaction.reply({
+                    let targetUser = interaction.user;
+
+                    const otherUser = interaction.options.getUser("user");
+                    if(otherUser && otherUser.id !== interaction.user.id) {
+                        const otherValorantUser = getUser(otherUser.id);
+                        if(!otherValorantUser) return await interaction.reply({
+                            embeds: [basicEmbed(s(interaction).error.NOT_REGISTERED_OTHER)]
+                        });
+
+                        if(!getSetting(otherUser.id, "othersCanViewColl")) return await interaction.reply({
+                            embeds: [basicEmbed(s(interaction).error.OTHER_COLLECTION_DISABLED.f({u: `<@${otherUser.id}>`}))]
+                        });
+
+                        targetUser = otherUser;
+                    }
+                    else if(!valorantUser) return await interaction.reply({
                         embeds: [basicEmbed(s(interaction).error.NOT_REGISTERED)],
                         ephemeral: true
                     });
 
                     await defer(interaction);
 
-                    const message = await renderCollection(interaction);
+                    const message = await renderCollection(interaction, targetUser.id);
                     await interaction.followUp(message);
 
-                    console.log(`Sent ${interaction.user.tag}'s collection!`);
+                    console.log(`Sent ${targetUser.tag}'s collection!`);
 
                     break;
                 }
@@ -1134,7 +1171,8 @@ client.on("interactionCreate", async (interaction) => {
                     embeds: [basicEmbed(s(interaction).error.GENERIC_NO_PERMS)]
                 });
 
-                const message = interaction.message;
+                const channel = await client.channels.fetch(interaction.channelId);
+                const message = await channel.messages.fetch(interaction.message.id);
                 if(!message.components) message.components = switchAccountButtons(interaction, customId, true);
 
                 for(const actionRow of message.components) {
@@ -1154,7 +1192,7 @@ client.on("interactionCreate", async (interaction) => {
 
                 const success = switchAccount(interaction.user.id, parseInt(accountIndex));
                 if(!success) return await interaction.followUp({
-                        embeds: [basicEmbed(s(interaction).error.ACCOUNT_NUMBER_TOO_HIGH)],
+                        embeds: [basicEmbed(s(interaction).error.ACCOUNT_NOT_FOUND)],
                         ephemeral: true
                 });
 
@@ -1169,7 +1207,8 @@ client.on("interactionCreate", async (interaction) => {
 
                 if(!newMessage.components) newMessage.components = switchAccountButtons(interaction, customId, true);
 
-                await interaction.message.edit(newMessage);
+
+                await message.edit(newMessage);
             }
         } catch(e) {
             await handleError(e, interaction);
