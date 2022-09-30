@@ -91,8 +91,6 @@ export const authUser = async (id, account=null) => {
     return await refreshToken(id, account);
 }
 
-const userAgent = "RiotClient/51.0.0.4429735.4381201 rso-auth (Windows;10;;Professional, x64)";
-
 export const redeemUsernamePassword = async (id, login, password) => {
 
     let rateLimit = isRateLimited("auth.riotgames.com");
@@ -103,7 +101,7 @@ export const redeemUsernamePassword = async (id, login, password) => {
         method: "POST",
         headers: {
             'Content-Type': 'application/json',
-            'user-agent': userAgent
+            'user-agent': await getUserAgent()
         },
         body: JSON.stringify({
             'client_id': 'play-valorant-web-prod',
@@ -125,7 +123,7 @@ export const redeemUsernamePassword = async (id, login, password) => {
         method: "PUT",
         headers: {
             'Content-Type': 'application/json',
-            'user-agent': userAgent,
+            'user-agent': await getUserAgent(),
             'cookie': stringifyCookies(cookies)
         },
         body: JSON.stringify({
@@ -145,6 +143,7 @@ export const redeemUsernamePassword = async (id, login, password) => {
         ...parseSetCookie(req2.headers['set-cookie'])
     };
 
+    console.error(req2)
     const json2 = JSON.parse(req2.body);
     if(json2.type === 'error') {
         if(json2.error === "auth_failure") console.error("Authentication failure!", json2);
@@ -186,7 +185,7 @@ export const redeem2FACode = async (id, code) => {
         method: "PUT",
         headers: {
             'Content-Type': 'application/json',
-            'user-agent': userAgent,
+            'user-agent': await getUserAgent(),
             'cookie': stringifyCookies(user.auth.cookies)
         },
         body: JSON.stringify({
@@ -216,7 +215,7 @@ export const redeem2FACode = async (id, code) => {
         return {success: false};
     }
 
-    user = await processAuthResponse(id, {login: user.auth.login, password: atob(user.auth.password), cookies: user.auth.cookies}, json, user);
+    user = await processAuthResponse(id, {login: user.auth.login, password: atob(user.auth.password || ""), cookies: user.auth.cookies}, json, user);
 
     delete user.auth.waiting2FA;
     addUser(user);
@@ -278,7 +277,7 @@ const getUserInfo = async (user) => {
     const json = JSON.parse(req.body);
     if(json.acct) return {
         puuid: json.sub,
-        username: json.acct.game_name + "#" + json.acct.tag_line
+        username: json.acct.game_name && json.acct.game_name + "#" + json.acct.tag_line
     }
 }
 
@@ -321,7 +320,7 @@ export const redeemCookies = async (id, cookies) => {
 
     const req = await fetch("https://auth.riotgames.com/authorize?redirect_uri=https%3A%2F%2Fplayvalorant.com%2Fopt_in&client_id=play-valorant-web-prod&response_type=token%20id_token&scope=account%20openid&nonce=1", {
         headers: {
-            'user-agent': userAgent,
+            'user-agent': await getUserAgent(),
             cookie: cookies
         }
     });
@@ -364,6 +363,44 @@ export const refreshToken = async (id, account=null) => {
 
     if(!response.success && !response.mfa && !response.rateLimit) deleteUserAuth(user);
     return response;
+}
+
+let riotClientVersion;
+let userAgentFetchPromise;
+export const fetchRiotClientVersion = async () => {
+    if(userAgentFetchPromise) return userAgentFetchPromise;
+
+    let resolve;
+    if(userAgentFetchPromise !== null) {
+        console.log("Fetching latest Riot user-agent..."); // only log it the first time
+        userAgentFetchPromise = new Promise(r => resolve = r);
+    }
+
+    const githubReq = await fetch("https://api.github.com/repos/Morilli/riot-manifests/contents/Riot%20Client/KeystoneFoundationLiveWin?ref=master", {
+        headers: {"User-Agent": "giorgi-o/skinpeek"}
+    });
+    const json = JSON.parse(githubReq.body);
+
+    const versions = json.map(file => file.name.split('_')[0]);
+    const compareVersions = (a, b) => {
+        const aSplit = a.split(".");
+        const bSplit = b.split(".");
+        for(let i = 0; i < aSplit.length; i++) {
+            if(aSplit[i] > bSplit[i]) return 1;
+            if(aSplit[i] < bSplit[i]) return -1;
+        }
+        return 0;
+    }
+    versions.sort((a, b) => compareVersions(b, a));
+
+    riotClientVersion = versions[0];
+    userAgentFetchPromise = null;
+    resolve();
+}
+
+const getUserAgent = async () => {
+    if(!riotClientVersion) await fetchRiotClientVersion();
+    return `RiotClient/${riotClientVersion}.1234567 rso-auth (Windows;10;;Professional, x64)`;
 }
 
 export const deleteUserAuth = (user) => {

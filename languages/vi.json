@@ -41,6 +41,7 @@
       "ALERT_NO_PERMS": "**Bot không có quyền gửi các thông báo vào kênh này!**\nĐảm bảo rằng Bot đã có đủ quyền `VIEW_CHANNELS`, `SEND_MESSAGES`, `EMBED_LINKS` và `USE_EXTERNAL_EMOJIS`",
       "GENERIC_NO_PERMS": "**Bot không có quyền làm điều đó trong kênh này!** \nĐảm bảo rằng Bot đã có đủ quyền `VIEW_CHANNELS`, `SEND_MESSAGES`, `EMBED_LINKS` và `USE_EXTERNAL_EMOJIS`",
       "NO_NMARKET": "**Hiện tại đang không có Chợ Đêm!**",
+      "NO_NMARKET_WITH_DATE": "**Hiện tại không có Chợ đêm!** Chợ đêm tiếp theo sẽ xuất hiện sau <t:{t}:R>.",
       "ACCOUNT_NOT_FOUND": "**Không tìm thấy tài khoản**",
       "ACCOUNT_NUMBER_TOO_HIGH": "**Đã đạt giới hạn số lượng tài khoản tối đa ({n} tài khoản)**",
       "TOO_MANY_ACCOUNTS": "**Đã đạt giới hạn số lượng tài khoản tối đa ({n} tài khoản)** Đăng xuất các tài khoản khác trước khi thử lại.",
@@ -49,11 +50,11 @@
     "info":{
       "SHOP_HEADER": "Cửa hàng ngày hôm nay của **{u}** (làm mới sau <t:{t}:R>)",
       "BUNDLE_HEADER": "Đang mở bán: **{b}**",
-      "BUNDLES_HEADER": "Bộ sưu tập đang được mở bán trong cửa hagf:",
+      "BUNDLES_HEADER": "Bộ sưu tập đang được mở bán trong cửa hàng:",
       "BUNDLES_HEADER_DESC": "Dùng `/bundle` để xem bộ sưu tập bất kì.",
       "BUNDLE_CHOICE": "Bạn muốn xem bộ sưu tập nào?",
       "BUNDLE_CHOICE_PLACEHOLDER": "Chọn bộ sưu tập:",
-      "NO_BUNDLE_DATA": "Không có dữ liệu",
+      "NO_BUNDLE_DATA": "Riot không đưa cho mình dữ liệu của những bộ sưu tập cũ! :(",
       "BUNDLE_NAME": "Bộ sưu tập {b}",
       "EXPIRES": "hết hạn sau <t:{t}:R>",
       "EXPIRED": "đã hết hạn trong <t:{t}:R>",
@@ -110,6 +111,10 @@
       "LOADING": "Đang tải...",
       "HIDDEN_USERNAME": "tên đã ẩn",
       "NO_USERNAME": "[Không có tên]",
+      "NO_MAINTENANCES": "Chưa có thông tin về lần bảo trì tiếp theo tại **{r}** vào thời điểm hiện tại!",
+      "MAINTENANCE_HEADER": "Thông tin {t} hiện tại trong khu vực {r}:",
+      "MAINTENANCE_TYPE": "bảo trì",
+      "INCIDENT_TYPE": "sự cố",
       "UNHANDLED_COMMAND": "Lệnh không tồn tại"
     },
     "battlepass": {
@@ -127,7 +132,7 @@
       "GAMEMODE_COL": "Chế độ chơi",
       "INCL_WEEKLIES_COL": "gồm nhiệm vụ tuần",
       "NORMAL_ROW": "Đấu thường/Xếp hạng",
-      "SPIKERUSH_ROW": "Đặt Spike nhanh",
+      "SPIKERUSH_ROW": "Đặt Spike Nhanh",
       "ACT_END": "Kết thúc trong {d} ngày",
       "XP_HEADER": "\uD83D\uDCC5 Số XP cần thêm",
       "AVERAGE_COL": "Trung bình",
@@ -146,4 +151,4 @@
       "othersCanViewColl": "Cho phép mọi người xem /collection của bạn"
     }
   }
-  
+

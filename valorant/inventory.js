@@ -1,13 +1,13 @@
-import {fetch, isMaintenance} from "../misc/util.js";
+import {fetch, isMaintenance, userRegion} from "../misc/util.js";
 import {authUser, deleteUserAuth, getUser} from "./auth.js";
-import {authFailureMessage, skinCollectionSingleEmbed} from "../discord/embed.js";
+import {authFailureMessage, basicEmbed, skinCollectionSingleEmbed} from "../discord/embed.js";
 import config from "../misc/config.js";
 import {s} from "../misc/languages.js";
 
 
 export const getEntitlements = async (user, itemTypeId, itemType="item") => {
     // https://github.com/techchrism/valorant-api-docs/blob/trunk/docs/Store/GET%20Store_GetEntitlements.md
-    const req = await fetch(`https://pd.${user.region}.a.pvp.net/store/v1/entitlements/${user.puuid}/${itemTypeId}`, {
+    const req = await fetch(`https://pd.${userRegion(user)}.a.pvp.net/store/v1/entitlements/${user.puuid}/${itemTypeId}`, {
         headers: {
             "Authorization": "Bearer " + user.auth.rso,
             "X-Riot-Entitlements-JWT": user.auth.ent
@@ -60,7 +60,7 @@ export const getLoadout = async (user, account) => {
     user = getUser(user.id, account);
     console.log(`Fetching loadout for ${user.username}...`);
 
-    const req = await fetch(`https://pd.${user.region}.a.pvp.net/personalization/v2/players/${user.puuid}/playerloadout`, {
+    const req = await fetch(`https://pd.${userRegion(user)}.a.pvp.net/personalization/v2/players/${user.puuid}/playerloadout`, {
         headers: {
             "Authorization": "Bearer " + user.auth.rso,
             "X-Riot-Entitlements-JWT": user.auth.ent
@@ -91,6 +91,8 @@ export const getLoadout = async (user, account) => {
 
 export const renderCollection = async (interaction, targetId=interaction.user.id) => {
     const user = getUser(targetId);
+    if(!user) return await interaction.reply({embeds: [basicEmbed(s(interaction).error.NOT_REGISTERED)]});
+
     const loadout = await getLoadout(user);
     if(!loadout.success) {
         let errorText;

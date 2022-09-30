@@ -17,9 +17,9 @@ import {
     statsForSkinEmbed,
     allStatsEmbed,
     accountsListEmbed,
-    switchAccountButtons, skinCollectionPageEmbed, skinCollectionSingleEmbed
+    switchAccountButtons, skinCollectionPageEmbed, skinCollectionSingleEmbed, valMaintenancesEmbeds
 } from "./embed.js";
-import {authUser, getUser, getUserList, setUserLocale,} from "../valorant/auth.js";
+import {authUser, fetchRiotClientVersion, getUser, getUserList, setUserLocale,} from "../valorant/auth.js";
 import {getBalance} from "../valorant/shop.js";
 import {getSkin, fetchData, searchSkin, searchBundle, getBundle} from "../valorant/cache.js";
 import {
@@ -41,7 +41,7 @@ import {getOverallStats, getStatsFor} from "../misc/stats.js";
 import {
     canSendMessages,
     defer,
-    fetchChannel,
+    fetchChannel, fetchMaintenances,
     removeAlertActionRow,
     skinNameAndEmoji,
     valNamesToDiscordNames,
@@ -80,6 +80,7 @@ client.on("ready", async () => {
 
     console.log("Loading skins...");
     fetchData().then(() => console.log("Skins loaded!"));
+    fetchRiotClientVersion().then(() => console.log("Fetched latest Riot user-agent!"));
 
     scheduleTasks();
 
@@ -103,6 +104,9 @@ export const scheduleTasks = () => {
 
     // if send console to discord channel is enabled, send console output every 10 seconds
     if(config.logToChannel && config.logFrequency) cronTasks.push(cron.schedule(config.logFrequency, sendConsoleOutput));
+
+    // check for a new riot client version (new user agent) every 15mins
+    if(config.updateUserAgent) cronTasks.push(cron.schedule(config.updateUserAgent, fetchRiotClientVersion));
 }
 
 export const destroyTasks = () => {
@@ -288,6 +292,10 @@ const commands = [
     {
         name: "accounts",
         description: "Show all of your Valorant accounts"
+    },
+    {
+        name: "valstatus",
+        description: "Check the status of your account's VALORANT servers"
     },
     {
         name: "info",
@@ -718,7 +726,7 @@ client.on("interactionCreate", async (interaction) => {
                     await defer(interaction, true);
 
                     const json = readUserJson(interaction.user.id);
-                    if(json && json.accounts.length > config.maxAccountsPerUser) {
+                    if(json && json.accounts.length >= config.maxAccountsPerUser) {
                         return await interaction.followUp({
                             embeds: [basicEmbed(s(interaction).error.TOO_MANY_ACCOUNTS.f({n: config.maxAccountsPerUser}))]
                         })
@@ -945,6 +953,14 @@ client.on("interactionCreate", async (interaction) => {
                         case "view": return await handleSettingsViewCommand(interaction);
                         case "set": return await handleSettingsSetCommand(interaction);
                     }
+
+                    break;
+                }
+                case "valstatus": {
+                    await defer(interaction);
+
+                    const json = await fetchMaintenances(valorantUser.region);
+                    await interaction.followUp(valMaintenancesEmbeds(interaction, json));
 
                     break;
                 }
@@ -1179,7 +1195,7 @@ client.on("interactionCreate", async (interaction) => {
                     for(const component of actionRow.components) {
                         if(component.customId === interaction.customId) {
                             component.label = s(interaction).info.LOADING;
-                            component.style = "DANGER";
+                            component.style = "PRIMARY";
                             component.emoji = {name: '⏳'};
                         }
                     }

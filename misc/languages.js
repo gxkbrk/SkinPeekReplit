@@ -60,6 +60,10 @@ const importLanguage = (language) => {
         });
     }
 
+    for(const category in languages[DEFAULT_LANG]) {
+        if(!languageHandler[category]) languageHandler[category] = languages[DEFAULT_LANG][category];
+    }
+
     languages[language] = languageHandler;
 }
 importLanguage(DEFAULT_LANG);
@@ -75,7 +79,8 @@ export const s = (interaction) => {
 
 // format a string
 String.prototype.f = function(args, interactionOrId=null) {
-    let str = hideUsername(this, interactionOrId);
+    args = hideUsername(args, interactionOrId);
+    let str = this;
     for(let i in args)
         str = str.replace(`{${i}}`, args[i]);
     return str;
@@ -95,13 +100,13 @@ export const l = (names, interaction) => {
     return names[valLocale];
 }
 
-const hideUsername = (str, interactionOrId) => {
-    if(!interactionOrId) return str;
-    if(typeof interactionOrId === 'string') {
-        if(!getSetting(interactionOrId, "hideIgn")) return str;
-    }
-    else if(!getSetting(interactionOrId.user.id, "hideIgn")) return str;
+const hideUsername = (args, interactionOrId) => {
+    if(!args.u) return {...args, u: s(interactionOrId).info.NO_USERNAME};
+    if(!interactionOrId) return args;
 
-    return str.replaceAll("**{u}**", `||*${s(interactionOrId).info.HIDDEN_USERNAME}*||`)
-        .replaceAll("{u}", `[${s(interactionOrId).info.HIDDEN_USERNAME}]`);
+    const id = typeof interactionOrId === 'string' ? interactionOrId : interactionOrId.user.id;
+    const hide = getSetting(id, 'hideIgn');
+    if(!hide) return args;
+
+    return {...args, u: `||*${s(interactionOrId).info.HIDDEN_USERNAME}*||`};
 }
