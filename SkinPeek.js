@@ -2,6 +2,7 @@ import {loadConfig} from "./misc/config.js";
 import {startBot} from "./discord/bot.js";
 import {loadLogger} from "./misc/logger.js";
 import {transferUserDataFromOldUsersJson} from "./valorant/auth.js";
+const keep_alive = import("./keep_alive.js");
 
 /* TODO list:
  * (done) Balance
