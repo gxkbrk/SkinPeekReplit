@@ -1,5 +1,5 @@
 {
-  "token": "Add the token to the "Secrets" tab. Just click the lock symbol on the left side.",
+  "token": "Add the token to the 'Secrets' tab. Just click the lock symbol on the left side.",
   "fetchSkinPrices": true,
   "fetchSkinRarities": true,
   "localiseSkinNames": true,
