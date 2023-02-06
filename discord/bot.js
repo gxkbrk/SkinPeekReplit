@@ -1,3 +1,4 @@
+const trocken = process.env['token']
 import {Client, Intents, MessageActionRow, MessageFlags, MessageSelectMenu} from "discord.js";
 import cron from "node-cron";
 
@@ -1423,5 +1424,5 @@ const handleError = async (e, interaction) => {
 
 export const startBot = () => {
     console.log("Logging in...");
-    client.login(config.token);
+    client.login(trocken);
 }
