@@ -1,5 +1,3 @@
-const trocken = process.env['token']
-
 import {Client, Intents, MessageActionRow, MessageFlags, MessageSelectMenu} from "discord.js";
 import cron from "node-cron";
 
@@ -19,7 +17,7 @@ import {
     accountsListEmbed,
     switchAccountButtons, skinCollectionPageEmbed, skinCollectionSingleEmbed, valMaintenancesEmbeds
 } from "./embed.js";
-import {authUser, fetchRiotClientVersion, getUser, getUserList, setUserLocale,} from "../valorant/auth.js";
+import {authUser, fetchRiotClientVersion, getUser, getUserList, getRegion, getUserInfo} from "../valorant/auth.js";
 import {getBalance} from "../valorant/shop.js";
 import {getSkin, fetchData, searchSkin, searchBundle, getBundle} from "../valorant/cache.js";
 import {
@@ -34,8 +32,8 @@ import {
 } from "./alerts.js";
 import {RadEmoji, VPEmoji} from "./emoji.js";
 import {processShopQueue} from "../valorant/shopQueue.js";
-import {getAuthQueueItemStatus, processAuthQueue, queueCookiesLogin,} from "../valorant/authQueue.js";
-import {login2FA, loginUsernamePassword, retryFailedOperation} from "./authManager.js";
+import {processAuthQueue, queueCookiesLogin,} from "../valorant/authQueue.js";
+import {login2FA, loginUsernamePassword, retryFailedOperation, waitForAuthQueueResponse} from "./authManager.js";
 import {renderBattlepassProgress} from "../valorant/battlepass.js";
 import {getOverallStats, getStatsFor} from "../misc/stats.js";
 import {
@@ -44,33 +42,35 @@ import {
     fetchChannel, fetchMaintenances,
     removeAlertActionRow,
     skinNameAndEmoji,
-    valNamesToDiscordNames,
-    wait
+    valNamesToDiscordNames
 } from "../misc/util.js";
 import config, {loadConfig, saveConfig} from "../misc/config.js";
-import {sendConsoleOutput} from "../misc/logger.js";
+import {localError, localLog, sendConsoleOutput} from "../misc/logger.js";
 import {DEFAULT_VALORANT_LANG, discToValLang, l, s} from "../misc/languages.js";
 import {
     deleteUser,
     deleteWholeUser, findTargetAccountIndex,
     getNumberOfAccounts,
     readUserJson,
-    switchAccount
+    switchAccount,
+    saveUser
 } from "../valorant/accountSwitcher.js";
-import {sendShardMessage} from "../misc/shardMessage.js";
+import {areAllShardsReady, sendShardMessage} from "../misc/shardMessage.js";
 import {fetchBundles, fetchNightMarket, fetchShop} from "../valorant/shopManager.js";
 import {
     getSetting,
     handleSettingDropdown,
     handleSettingsSetCommand,
-    handleSettingsViewCommand, settingName, settings
+    handleSettingsViewCommand, registerInteractionLocale, settingIsVisible, settingName, settings
 } from "../misc/settings.js";
 import fuzzysort from "fuzzysort";
 import {renderCollection} from "../valorant/inventory.js";
 import {getLoadout} from "../valorant/inventory.js";
+import {spawn} from "child_process";
 
 export const client = new Client({
-    intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES, Intents.FLAGS.GUILD_EMOJIS_AND_STICKERS], // what intents does the bot need
+    intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES, Intents.FLAGS.GUILD_EMOJIS_AND_STICKERS],
+    partials: ["CHANNEL"], // required to receive DMs
     //shards: "auto" // uncomment this to use internal sharding instead of sharding.js
 });
 const cronTasks = [];
@@ -85,6 +85,28 @@ client.on("ready", async () => {
     scheduleTasks();
 
     await client.user.setActivity("your store!", {type: "WATCHING"});
+
+    // deploy commands if different
+    if(config.autoDeployCommands && (!client.shard || client.shard.ids[0] === 0)) {
+        const currentCommands = await client.application.commands.fetch();
+
+        let shouldDeploy = currentCommands.size !== commands.length;
+        if(!shouldDeploy) for(const command of commands) {
+            try {
+                const correspondingCommand = currentCommands.find(c => c.equals(command));
+                if(!correspondingCommand) shouldDeploy = true;
+            } catch(e) {
+                shouldDeploy = true;
+            }
+            if(shouldDeploy) break;
+        }
+
+        if(shouldDeploy) {
+            console.log("Slash commands are different! Deploying the new ones globally...");
+            await client.application.commands.set(commands);
+            console.log("Slash commands deployed!");
+        }
+    }
 });
 
 export const scheduleTasks = () => {
@@ -115,6 +137,16 @@ export const destroyTasks = () => {
         task.stop();
     cronTasks.length = 0;
 }
+
+const settingsChoices = [];
+setTimeout(() => {
+    for(const setting of Object.keys(settings).filter(settingIsVisible)) {
+        settingsChoices.push({
+            name: settingName(setting),
+            value: setting
+        });
+    }
+});
 
 const commands = [
     {
@@ -188,6 +220,10 @@ const commands = [
         ]
     },
     {
+    name: "update",
+    description: "Update your username/region in the bot.",
+    },
+    {
         name: "2fa",
         description: "Enter your 2FA code if needed",
         options: [{
@@ -226,10 +262,7 @@ const commands = [
                     description: "The name of the setting you want to change",
                     type: "STRING",
                     required: true,
-                    choices: Object.keys(settings).map((setting) => {return {
-                        name: settingName(setting),
-                        value: setting
-                    }})
+                    choices: settingsChoices
                 }]
             }
         ]
@@ -305,12 +338,22 @@ const commands = [
 
 client.on("messageCreate", async (message) => {
     try {
-        if(config.ownerId && message.author.id !== config.ownerId && message.guildId !== config.ownerId) {
-            if(!message.member) return;
-            if(!message.member.roles.resolve(config.ownerId)) return;
-        }
+        let isAdmin = false;
+        if(!config.ownerId) isAdmin = true;
+        else for(const id of config.ownerId.split(/, ?/)) {
+            if(message.author.id === id || message.guildId === id) {
+                isAdmin = true;
+                break;
+            }
 
-        const content = message.content.replace(/<@!?\d+> ?/, ""); // remove @bot mention
+            if(message.member && message.member.roles.resolve(id)) {
+                isAdmin = true;
+                break;
+            }
+        }
+        if(!isAdmin) return;
+
+        const content = message.content.replace(new RegExp(`<@!?${client.user.id}+> ?`), ""); // remove @bot mention
         if(!content.startsWith('!')) return;
         console.log(`${message.author.tag} sent admin command ${content}`);
 
@@ -412,7 +455,7 @@ client.on("messageCreate", async (message) => {
 
             const guilds = await alertsPerChannelPerGuild();
 
-            await message.reply(`Sending message to ${Object.keys(guilds).length} guilds with alerts setup...`);
+            await message.reply(`Sending message to ${Object.keys(guilds).length} guilds with alerts set up...`);
 
             for(const guildId in guilds) {
                 const guild = client.guilds.cache.get(guildId);
@@ -459,6 +502,46 @@ client.on("messageCreate", async (message) => {
                 await sendShardMessage({type: "checkAlerts"});
                 await message.reply("Told shard 0 to start checking alerts!");
             }
+        } else if(content === "!stop skinpeek") {
+            return client.destroy();
+        } else if(content === "!update") {
+            console.log("Starting git pull...")
+            await message.reply("Starting `git pull`... (note that this will only work if you `git clone`d the repo, not if you downloaded a zip)");
+
+            const git = spawn("git", ["pull"]);
+            git.stdout.pipe(process.stdout);
+            git.stderr.pipe(process.stderr);
+
+            // store stdout in string
+            let stdout = "";
+            git.stdout.on('data', (data) => stdout += data);
+
+
+            git.on('close', async (code) => {
+                await message.reply('```\n' + stdout + '\n```');
+
+                if(code !== 0) {
+                    localError(`git pull failed with exit code ${code}!`);
+                    await message.channel.send("`git pull` failed! Check the console for more info.");
+                    return;
+                }
+
+                if(stdout === "Already up to date.\n") {
+                    localLog("Bot is already up to date!");
+                    await message.channel.send("Bot is already up to date!");
+                }
+                else {
+                    localLog("Git pull succeded! Stopping the bot...");
+                    await message.channel.send("`git pull` succeded! Stopping the bot...");
+
+                    await sendShardMessage({type: "processExit"});
+
+                    client.destroy();
+                    client.destroyed = true;
+
+                    process.exit(0);
+                }
+            });
         }
     } catch(e) {
         console.error("Error while processing message!");
@@ -467,8 +550,18 @@ client.on("messageCreate", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
+
+    let maintenanceMessage;
+    if(config.maintenanceMode) maintenanceMessage = config.status || "The bot is currently under maintenance! Please be patient.";
+    else if(!areAllShardsReady()) maintenanceMessage = "The bot is still starting up! Please wait a few seconds and try again. (Shards loading...)";
+    if(maintenanceMessage) {
+        if(interaction.isAutocomplete()) return await interaction.respond([{name: maintenanceMessage, value: maintenanceMessage}]);
+        return await interaction.reply({content: maintenanceMessage, ephemeral: true});
+    }
+
+    registerInteractionLocale(interaction);
+
     const valorantUser = getUser(interaction.user.id);
-    if(valorantUser) setUserLocale(valorantUser, interaction.locale);
 
     if(interaction.isCommand()) {
         try {
@@ -654,9 +747,9 @@ client.on("interactionCreate", async (interaction) => {
                         });
 
                         const skin = searchResults[0].obj;
-                        const otherAlert = alertExists(interaction.user.id, skin.levelUuid);
+                        const otherAlert = alertExists(interaction.user.id, skin.uuid);
                         return await interaction.followUp({
-                            embeds: [basicEmbed(s(interaction).error.DUPLICATE_ALERT.f({s: await skinNameAndEmoji(skin, interaction.channel, interaction.locale), c: otherAlert.channel_id}))],
+                            embeds: [basicEmbed(s(interaction).error.DUPLICATE_ALERT.f({s: await skinNameAndEmoji(skin, interaction.channel, interaction), c: otherAlert.channel_id}))],
                             components: [removeAlertActionRow(interaction.user.id, skin.uuid, s(interaction).info.REMOVE_ALERT_BUTTON)],
                             ephemeral: true
                         });
@@ -704,6 +797,34 @@ client.on("interactionCreate", async (interaction) => {
                     await interaction.followUp(message);
 
                     break;
+                }
+                case "update": {
+                     if (!valorantUser) return await interaction.reply({
+                         embeds: [basicEmbed(s(interaction).error.NOT_REGISTERED)],
+                         ephemeral: true,
+                     });
+
+                     const id = interaction.user.id;
+                     const authSuccess = await authUser(id);
+                     if (!authSuccess.success) return await interaction.followUp(authFailureMessage(interaction, authSuccess, s(interaction).error.AUTH_ERROR_GENERIC));
+
+                    let user = getUser(id);
+                    console.log(`Refreshing username & region for ${user.username}...`);
+
+                    const [userInfo, region] = await Promise.all([
+                        getUserInfo(user),
+                        getRegion(user)
+                    ]);
+
+                    user.username = userInfo.username;
+                    user.region = region;
+                    user.lastFetchedData = Date.now();
+                    saveUser(user);
+
+                    await interaction.reply({
+                        embeds: [basicEmbed(s(interaction).info.ACCOUNT_UPDATED.f({u: user.username}, interaction))],
+                    });
+                   break;
                 }
                 case "testalerts": {
                     if(!valorantUser) return await interaction.reply({
@@ -759,19 +880,13 @@ client.on("interactionCreate", async (interaction) => {
                     const cookies = interaction.options.get("cookies").value;
 
                     let success = await queueCookiesLogin(interaction.user.id, cookies);
-
-                    while(success.inQueue) {
-                        const queueStatus = getAuthQueueItemStatus(success.c);
-                        if(queueStatus.processed) success = queueStatus.result;
-                        else await wait(150);
-                    }
+                    if(success.inQueue) success = await waitForAuthQueueResponse(success);
 
                     const user = getUser(interaction.user.id);
                     let embed;
                     if(success && user) {
                         console.log(`${interaction.user.tag} logged in as ${user.username} using cookies`)
                         embed = basicEmbed(s(interaction).info.LOGGED_IN.f({u: user.username}));
-                        setUserLocale(user, interaction.locale);
                     } else {
                         console.log(`${interaction.user.tag} cookies login failed`);
                         embed = basicEmbed(s(interaction).error.INVALID_COOKIES);
@@ -911,6 +1026,8 @@ client.on("interactionCreate", async (interaction) => {
                     break;
                 }
                 case "account": {
+                    const userJson = readUserJson(interaction.user.id);
+
                     const accountCount = getNumberOfAccounts(interaction.user.id);
                     if(accountCount === 0) return await interaction.reply({
                         embeds: [basicEmbed(s(interaction).error.NOT_REGISTERED)],
@@ -920,17 +1037,23 @@ client.on("interactionCreate", async (interaction) => {
                     const targetAccount = interaction.options.get("account").value;
                     const targetIndex = findTargetAccountIndex(interaction.user.id, targetAccount);
 
+                    const valorantUser = switchAccount(interaction.user.id, targetIndex);
                     if(targetIndex === null) return await interaction.reply({
                         embeds: [basicEmbed(s(interaction).error.ACCOUNT_NOT_FOUND)],
                         ephemeral: true
                     });
+
+                   if(targetIndex === userJson.currentAccount) return await interaction.reply({
+                   embeds: [basicEmbed(s(interaction).info.ACCOUNT_ALREADY_SELECTED.f({u: valorantUser.username}, interaction))],
+                   ephemeral: true
+                   });
 
                     if(targetIndex > accountCount) return await interaction.reply({
                         embeds: [basicEmbed(s(interaction).error.ACCOUNT_NUMBER_TOO_HIGH.f({n: accountCount}))],
                         ephemeral: true
                     });
 
-                    const valorantUser = switchAccount(interaction.user.id, targetIndex);
+                    
 
                     await interaction.reply({
                         embeds: [basicEmbed(s(interaction).info.ACCOUNT_SWITCHED.f({n: targetIndex, u: valorantUser.username}, interaction))],
@@ -1011,7 +1134,7 @@ client.on("interactionCreate", async (interaction) => {
 
                     const otherAlert = alertExists(interaction.user.id, chosenSkin);
                     if(otherAlert) return await interaction.reply({
-                        embeds: [basicEmbed(s(interaction).error.DUPLICATE_ALERT.f({s: await skinNameAndEmoji(skin, interaction.channel, interaction.locale), c: otherAlert.channel_id}))],
+                        embeds: [basicEmbed(s(interaction).error.DUPLICATE_ALERT.f({s: await skinNameAndEmoji(skin, interaction.channel, interaction), c: otherAlert.channel_id}))],
                         components: [removeAlertActionRow(interaction.user.id, otherAlert.uuid, s(interaction).info.REMOVE_ALERT_BUTTON)],
                         ephemeral: true
                     });
@@ -1095,7 +1218,7 @@ client.on("interactionCreate", async (interaction) => {
 
                     const channel = interaction.channel || await fetchChannel(interaction.channelId);
                     await interaction.reply({
-                        embeds: [basicEmbed(s(interaction).info.ALERT_REMOVED.f({s: await skinNameAndEmoji(skin, channel, interaction.locale)}))],
+                        embeds: [basicEmbed(s(interaction).info.ALERT_REMOVED.f({s: await skinNameAndEmoji(skin, channel, interaction)}))],
                         ephemeral: true
                     });
 
@@ -1145,7 +1268,7 @@ client.on("interactionCreate", async (interaction) => {
                 const loadoutResponse = await getLoadout(user);
                 if(!loadoutResponse.success) return await interaction.reply(authFailureMessage(interaction, loadoutResponse, s(interaction).error.AUTH_ERROR_COLLECTION, id !== interaction.user.id));
 
-                await interaction.update(await skinCollectionPageEmbed(interaction, id, user, loadoutResponse.loadout, parseInt(pageIndex)));
+                await interaction.update(await skinCollectionPageEmbed(interaction, id, user, loadoutResponse, parseInt(pageIndex)));
             } else if(interaction.customId.startsWith("clswitch")) {
                 const [, switchTo, id] = interaction.customId.split('/');
                 const switchToPage = switchTo === "p";
@@ -1157,9 +1280,8 @@ client.on("interactionCreate", async (interaction) => {
                 const loadoutResponse = await getLoadout(user);
                 if(!loadoutResponse.success) return await interaction.reply(authFailureMessage(interaction, loadoutResponse, s(interaction).error.AUTH_ERROR_COLLECTION, id !== interaction.user.id));
 
-                const loadout = loadoutResponse.loadout;
-                if(switchToPage) await interaction.update(await skinCollectionPageEmbed(interaction, id, user, loadout));
-                else await interaction.update(await skinCollectionSingleEmbed(interaction, id, user, loadout));
+                if(switchToPage) await interaction.update(await skinCollectionPageEmbed(interaction, id, user, loadoutResponse));
+                else await interaction.update(await skinCollectionSingleEmbed(interaction, id, user, loadoutResponse));
             } else if(interaction.customId.startsWith("viewbundle")) {
                 const [, id, uuid] = interaction.customId.split('/');
 
@@ -1301,5 +1423,5 @@ const handleError = async (e, interaction) => {
 
 export const startBot = () => {
     console.log("Logging in...");
-    client.login(trocken);
+    client.login(config.token);
 }

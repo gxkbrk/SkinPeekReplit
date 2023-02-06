@@ -47,19 +47,25 @@ export const loadConfig = (filename="config.json") => {
     applyConfig(loadedConfig, "loginRetryTimeout", 10 * 60 * 1000);
     applyConfig(loadedConfig, "authFailureStrikes", 2);
     applyConfig(loadedConfig, "maxAccountsPerUser", 5);
+    applyConfig(loadedConfig, "userDataCacheExpiration", 168);
     applyConfig(loadedConfig, "rateLimitBackoff", 60);
+    applyConfig(loadedConfig, "rateLimitCap", 10 * 60);
     applyConfig(loadedConfig, "useShopQueue", false);
     applyConfig(loadedConfig, "shopQueue", "*/1 * * * * *");
+    applyConfig(loadedConfig, "useMultiqueue", false);
     applyConfig(loadedConfig, "storePasswords", false);
-    applyConfig(loadedConfig, "trackStoreStats", false);
+    applyConfig(loadedConfig, "trackStoreStats", true);
     applyConfig(loadedConfig, "statsExpirationDays", 14);
     applyConfig(loadedConfig, "statsPerPage", 8);
     applyConfig(loadedConfig, "shardReadyTimeout", 60 * 1000);
+    applyConfig(loadedConfig, "autoDeployCommands", true);
     applyConfig(loadedConfig, "ownerId", "");
     applyConfig(loadedConfig, "ownerName", "");
     applyConfig(loadedConfig, "status", "Up and running!");
+    applyConfig(loadedConfig, "maintenanceMode", false);
     applyConfig(loadedConfig, "logToChannel", "");
     applyConfig(loadedConfig, "logFrequency", "*/10 * * * * *");
+    applyConfig(loadedConfig, "logUrls", false);
 
     saveConfig(filename, config);
 

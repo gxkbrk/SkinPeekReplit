@@ -7,7 +7,7 @@ import {DEFAULT_VALORANT_LANG, discToValLang} from "../misc/languages.js";
 import {client} from "../discord/bot.js";
 import {sendShardMessage} from "../misc/shardMessage.js";
 
-const formatVersion = 7;
+const formatVersion = 9;
 let gameVersion;
 
 let weapons, skins, rarities, buddies, sprays, cards, titles, bundles, battlepass;
@@ -101,10 +101,20 @@ export const getSkinList = async (gameVersion) => {
         for(const skin of weapon.skins) {
             const levelOne = skin.levels[0];
 
-            let icon;
-            if(skin.themeUuid === "5a629df4-4765-0214-bd40-fbb96542941f") // default skins don't have displayIcon
-                icon = skin.chromas[0].fullRender;
-            else icon = levelOne.displayIcon;
+          let icon;
+          if (skin.themeUuid === "5a629df4-4765-0214-bd40-fbb96542941f") {
+              icon = skin.chromas[0] && skin.chromas[0].fullRender;
+          } else {
+              for (let i = 0; i < skin.levels.length; i++) {
+                  if (skin.levels[i] && skin.levels[i].displayIcon) {
+                      icon = skin.levels[i].displayIcon;
+                      break;
+                  }
+              }
+          }
+          
+          if(!icon) icon = null;
+
 
             skins[levelOne.uuid] = {
                 uuid: levelOne.uuid,
@@ -194,7 +204,7 @@ const getBundleList = async (gameVersion) => {
     }
 
     // get bundle items from https://docs.valtracker.gg/bundles
-    const req2 = await fetch("https://api.valtracker.gg/bundles");
+    const req2 = await fetch("https://api.valtracker.gg/v1/bundles");
     console.assert(req2.statusCode === 200, `ValTracker bundles items status code is ${req.statusCode}!`, req);
 
     const json2 = JSON.parse(req2.body);
@@ -411,7 +421,8 @@ export const fetchBattlepassInfo = async (gameVersion) => {
     battlepass = {
         version: gameVersion,
         uuid: currentBattlepass.uuid,
-        end: currentSeason.endTime
+        end: currentSeason.endTime,
+        chapters: currentBattlepass.content.chapters
     }
 
     saveSkinsJSON();

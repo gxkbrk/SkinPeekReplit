@@ -22,7 +22,7 @@ import {MessageActionRow, MessageButton} from "discord.js";
 import {getStatsFor} from "../misc/stats.js";
 import {getUser} from "../valorant/auth.js";
 import {readUserJson, removeDupeAccounts, saveUser} from "../valorant/accountSwitcher.js";
-import {getSetting, humanifyValue, settingName} from "../misc/settings.js";
+import {getSetting, humanifyValue, settingIsVisible, settingName} from "../misc/settings.js";
 import {VPEmoji} from "./emoji.js";
 import {getNextNightMarketTimestamp} from "../valorant/shop.js";
 
@@ -80,7 +80,7 @@ export const authFailureMessage = (interaction, authResponse, message="AUTH_ERRO
 
 export const skinChosenEmbed = async (interaction, skin) => {
     const channel = interaction.channel || await fetchChannel(interaction.channelId);
-    let description = s(interaction).info.ALERT_SET.f({s: await skinNameAndEmoji(skin, channel, interaction.locale)});
+    let description = s(interaction).info.ALERT_SET.f({s: await skinNameAndEmoji(skin, channel, interaction)});
     if(config.fetchSkinPrices && !skin.price) description += s(interaction).info.ALERT_BP_SKIN;
     return {
         description: description,
@@ -115,7 +115,7 @@ export const renderOffers = async (shop, interaction, valorantUser, VPemoji, oth
     }
     else headerText = s(interaction).info.SHOP_HEADER.f({u: valorantUser.username, t: shop.expires}, interaction);
 
-    const embeds = [basicEmbed(headerText)];
+    const embeds = [headerEmbed(headerText)];
 
     for(const uuid of shop.offers) {
         const skin = await getSkin(uuid);
@@ -248,7 +248,19 @@ export const renderNightMarket = async (market, interaction, valorantUser, emoji
 
 export const renderBattlepass = async (battlepass, targetlevel, interaction) => {
     if(!battlepass.success) return authFailureMessage(interaction, battlepass, s(interaction).error.AUTH_ERROR_BPASS);
+    if(battlepass.nextReward.rewardType === "EquippableCharmLevel"){
+          battlepass.nextReward.rewardType = s(interaction).battlepass.GUN_BUDDY;
+      }
+      if(battlepass.nextReward.rewardType === "EquippableSkinLevel"){
+          battlepass.nextReward.rewardType = s(interaction).battlepass.SKIN;
+      }
+      if(battlepass.nextReward.rewardType === "PlayerCard"){
+          battlepass.nextReward.rewardType = s(interaction).battlepass.CARD;
+      }
 
+      if(battlepass.nextReward.rewardName === undefined) {
+          battlepass.nextReward.rewardName = "Name not found"
+      }
     const user = getUser(interaction.user.id);
 
     let embeds = []
@@ -318,6 +330,20 @@ export const renderBattlepass = async (battlepass, targetlevel, interaction) => 
                     "inline": true
                 }
             ]
+        },
+        {
+            title: s(interaction).battlepass.NEXT_BP_REWARD,
+            color: VAL_COLOR_1,
+            fields: [
+                {
+                    "name": `**${s(interaction).battlepass.TYPE}:** \`${battlepass.nextReward.rewardType}\``,
+                    "value": `**${s(interaction).battlepass.REWARD}:** ${battlepass.nextReward.rewardName}\n**XP:** ${battlepass.bpdata.progressionTowardsNextLevel}/${battlepass.nextReward.XP}`,
+                    "inline": true
+                },
+            ],
+            thumbnail: {
+              url: battlepass.nextReward.rewardIcon,
+            },
         });
     } else {
         embeds.push({
@@ -348,7 +374,7 @@ const renderBundleItems = async (bundle, interaction, VPemojiString) => {
         const embed = await bundleItemEmbed(item, interaction, VPemojiString);
 
         if(item.amount !== 1) embed.title = `${item.amount}x ${embed.title}`
-        if(item.type === itemTypes.SKIN) embed.color = VAL_COLOR_1;
+        if(item.type === itemTypes.SKIN);
         if(item.basePrice && item.price !== item.basePrice) {
             embed.description = `${VPemojiString} **${item.price || s(interaction).info.FREE}** ~~${item.basePrice}~~`;
             if(item.type === itemTypes.TITLE) embed.description = "`" + item.item.text + "`\n\n" + embed.description
@@ -369,21 +395,30 @@ const renderBundleItems = async (bundle, interaction, VPemojiString) => {
 const bundleItemEmbed = async (item, interaction, VPemojiString) => {
     switch(item.type) {
         case itemTypes.SKIN: return skinEmbed(item.uuid, item.price, interaction, VPemojiString);
-        case itemTypes.BUDDY: return buddyEmbed(item.uuid, item.price, interaction.locale, VPemojiString);
-        case itemTypes.CARD: return cardEmbed(item.uuid, item.price, interaction.locale, VPemojiString);
-        case itemTypes.SPRAY: return sprayEmbed(item.uuid, item.price, interaction.locale, VPemojiString);
-        case itemTypes.TITLE: return titleEmbed(item.uuid, item.price, interaction.locale, VPemojiString);
+        case itemTypes.BUDDY: return buddyEmbed(item.uuid, item.price, interaction, VPemojiString);
+        case itemTypes.CARD: return cardEmbed(item.uuid, item.price, interaction, VPemojiString);
+        case itemTypes.SPRAY: return sprayEmbed(item.uuid, item.price, interaction, VPemojiString);
+        case itemTypes.TITLE: return titleEmbed(item.uuid, item.price, interaction, VPemojiString);
         default: return basicEmbed(s(interaction).error.UNKNOWN_ITEM_TYPE.f({t: item.type}));
     }
 }
 
 const skinEmbed = async (uuid, price, interaction, VPemojiString) => {
     const skin = await getSkin(uuid);
+    const colorMap = {
+      '0cebb8be-46d7-c12a-d306-e9907bfc5a25': '009984', 
+      'e046854e-406c-37f4-6607-19a9ba8426fc': 'f99358',
+      '60bca009-4182-7998-dee7-b8a2558dc369': 'd1538c',
+      '12683d76-48d7-84a3-4e09-6985794f0445': '5a9fe1',
+      '411e4a55-4e59-7757-41f0-86a53f101bb5': 'f9d563'
+    };
+
+    const color = colorMap[skin.rarity] || '000000'; // default to black
     return {
-        title: await skinNameAndEmoji(skin, interaction.channel, interaction.locale),
+        title: await skinNameAndEmoji(skin, interaction.channel, interaction),
         url: config.linkItemImage ? skin.icon : null,
         description: priceDescription(VPemojiString, price),
-        color: VAL_COLOR_2,
+        color: color,
         thumbnail: {
             url: skin.icon
         }
@@ -462,7 +497,7 @@ const Weapons = {
     Knife: "2f59173c-4bed-b6c3-2191-dea9b58be9c7",
 }
 
-export const skinCollectionSingleEmbed = async (interaction, id, user, loadout) => {
+export const skinCollectionSingleEmbed = async (interaction, id, user, {loadout, favorites}) => {
     const someoneElseUsedCommand = interaction.message ?
         interaction.message.interaction && interaction.message.interaction.user.id !== user.id :
         interaction.user.id !== user.id;
@@ -475,9 +510,10 @@ export const skinCollectionSingleEmbed = async (interaction, id, user, loadout) 
 
         totalValue += skin.price;
 
+        const starEmoji = favorites.FavoritedContent[skin.skinUuid] ? "⭐ " : "";
         return {
             name: l(weapon.names, interaction),
-            value: await skinNameAndEmoji(skin, interaction.channel, interaction.locale),
+            value: `${starEmoji}${await skinNameAndEmoji(skin, interaction.channel, interaction)}`,
             inline: inline
         }
     }
@@ -546,7 +582,7 @@ export const skinCollectionSingleEmbed = async (interaction, id, user, loadout) 
     }
 }
 
-export const skinCollectionPageEmbed = async (interaction, id, user, loadout, pageIndex=0) => {
+export const skinCollectionPageEmbed = async (interaction, id, user, {loadout, favorites}, pageIndex=0) => {
     const someoneElseUsedCommand = interaction.message ?
         interaction.message.interaction && interaction.message.interaction.user.id !== user.id :
         interaction.user.id !== user.id;
@@ -554,15 +590,17 @@ export const skinCollectionPageEmbed = async (interaction, id, user, loadout, pa
     let totalValue = 0;
     const emoji = await VPEmoji(interaction);
 
+
     const createEmbed = async (weaponUuid) => {
         const weapon = await getWeapon(weaponUuid);
         const skin = await getSkinFromSkinUuid(loadout.Guns.find(gun => gun.ID === weaponUuid).SkinID);
 
         totalValue += skin.price;
 
+        const starEmoji = favorites.FavoritedContent[skin.skinUuid] ? " ⭐" : "";
         return {
             title: l(weapon.names, interaction),
-            description: `**${await skinNameAndEmoji(skin, interaction.channel, interaction.locale)}**\n${emoji} ${skin.price || 'N/A'}`,
+            description: `**${await skinNameAndEmoji(skin, interaction.channel, interaction)}**${starEmoji}\n${emoji} ${skin.price || 'N/A'}`,
             color: VAL_COLOR_2,
             thumbnail: {
                 url: skin.icon
@@ -740,7 +778,7 @@ export const alertsPageEmbed = async (interaction, alerts, pageIndex, emojiStrin
             embeds: [{
                 title: s(interaction).info.ONE_ALERT,
                 color: VAL_COLOR_1,
-                description: `**${await skinNameAndEmoji(skin, interaction.channel, interaction.locale)}**\n${await alertFieldDescription(interaction, alert.channel_id, emojiString, skin.price)}`,
+                description: `**${await skinNameAndEmoji(skin, interaction.channel, interaction)}**\n${await alertFieldDescription(interaction, alert.channel_id, emojiString, skin.price)}`,
                 thumbnail: {
                     url: skin.icon
                 }
@@ -770,7 +808,7 @@ export const alertsPageEmbed = async (interaction, alerts, pageIndex, emojiStrin
     for(const alert of alertsToRender) {
         const skin = await getSkin(alert.uuid);
         embed.fields.push({
-            name: `**${n+1}.** ${await skinNameAndEmoji(skin, interaction.channel, interaction.locale)}`,
+            name: `**${n+1}.** ${await skinNameAndEmoji(skin, interaction.channel, interaction)}`,
             value: await alertFieldDescription(interaction, alert.channel_id, emojiString, skin.price),
             inline: alerts.length > 5
         });
@@ -844,7 +882,7 @@ export const statsForSkinEmbed = async (skin, stats, interaction) => {
     }
 
     return {
-        title: await skinNameAndEmoji(skin, interaction.channel, interaction.locale),
+        title: await skinNameAndEmoji(skin, interaction.channel, interaction),
         description: description,
         color: VAL_COLOR_2,
         thumbnail: {
@@ -888,9 +926,12 @@ export const settingsEmbed = (userSettings, interaction) => {
     }
 
     for(const [setting, value] of Object.entries(userSettings)) {
+        if(!settingIsVisible(setting)) continue;
+
+        const displayValue = humanifyValue(setting === "locale" && !userSettings.localeForced ? "Automatic" : value, interaction, true);
         embed.fields.push({
             name: settingName(setting, interaction),
-            value: humanifyValue(value, interaction, true),
+            value: displayValue,
             inline: true
         });
     }
@@ -921,7 +962,7 @@ export const valMaintenancesEmbeds = (interaction, {maintenances, incidents, id:
 export const valMaintenanceEmbed = (interaction, target, isIncident, regionName) => {
     const update = target.updates[0] || {};
     const strings = update.translations || target.titles;
-    const string = (strings.find(s => s.locale === (discToValLang[interaction.locale] || DEFAULT_VALORANT_LANG)) || strings[0]).content;
+    const string = (strings.find(s => s.locale.replace('_', '-') === (discToValLang[interaction.locale] || DEFAULT_VALORANT_LANG)) || strings[0]).content;
     const lastUpdate = Math.round(new Date(update.created_at || target.created_at) / 1000);
     const targetType = isIncident ? s(interaction).info.INCIDENT_TYPE : s(interaction).info.MAINTENANCE_TYPE;
 
@@ -937,6 +978,13 @@ export const basicEmbed = (content) => {
         color: VAL_COLOR_1
     }
 }
+
+export const headerEmbed = (content) => {
+  return {
+    description: content,
+    color: 0x202225,
+  };
+};
 
 export const secondaryEmbed = (content) => {
     return {

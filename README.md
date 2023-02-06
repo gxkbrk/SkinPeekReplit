@@ -2,8 +2,8 @@
 
 # SkinPeek
 
-View your Valorant daily shop from the comfort of your bed, set alerts for skins, and much more.  
-Easy to use, has many features, and used by small & large bots alike.  
+Discord bot to view your Valorant daily shop, set alerts for specific skins, and much more.  
+Simple to setup, easy to use, and has many useful features and commands.  
 
 <img src="https://user-images.githubusercontent.com/20621396/184029573-588c84aa-e183-409c-9452-e8d13028c228.png" alt="shop" width="504" >  
 <img src="https://user-images.githubusercontent.com/20621396/184029594-18d59bc6-7a54-48c8-89fc-d89aac76b180.png" alt="alert" width="633" >
@@ -22,21 +22,22 @@ Easy to use, has many features, and used by small & large bots alike.
 
 </details>
 
-Feel free to join the [support server](https://discord.gg/yx5sPJxWth) for any help with the bot or if you want to use a public instance without hosting it yourself!
+Feel free to join the [support server](https://discord.gg/yx5sPJxWth) for any help with the bot, or if you want to use a public instance without hosting it yourself.
 
 ## Features
 
 - 🔍 See your shop, bundles and night market easily and without lauching the game
 - 🔔 Set skin alerts to be notified automatically when they are in your shop
 - 🔀 Account switcher to check the shop and set alerts for multiple accounts
-- 📋 Automatically track which skins appear the most in your shop
-- 👀 See the shop of your friends using the bot (can be disabled)
-- ✔ Automatically imports new skins from Valorant updates
+- 📊 Automatically track which skins appear the most in your shop
+- 👀 Fetch and see the shop of your friends using the bot
+- ✔ Automatically imports new skins from the latest Valorant updates
 - ⬛ Hide your Valorant username from the message using `/settings`
 - 🌍 Skin names are automatically translated to any language that Valorant supports
 - 🛠 For bot admins:
-  - Easy to setup, highly configurable in `config.json`
-  - Optimised for reliability and performance
+  - Really easy to set up
+  - Optimised for performance and reliability
+  - Highly configurable in `config.json`
   - Toggleable login and shop queues to prevent rate limiting
   - Shop cache to prevent fetching the same user's shop twice
   - Used by large shop bots, highly scalable
@@ -51,23 +52,27 @@ Feel free to join the [support server](https://discord.gg/yx5sPJxWth) for any he
 - [Open a command prompt in the same folder](https://www.thewindowsclub.com/how-to-open-command-prompt-from-right-click-menu#:~:text=To%20open%20a%20command%20prompt%20window%20in%20any%20folder%2C%20simply,the%20same%20inside%20any%20folder.) and type `npm i` to install dependencies
 - Run [SkinPeek.js](https://github.com/giorgi-o/SkinPeek/blob/master/SkinPeek.js) using `node SkinPeek.js` in the command prompt
 - Give the bot a [role](https://support.discord.com/hc/en-us/articles/206029707-Setting-Up-Permissions-FAQ) that allows it to send messages and create custom emojis
-- Send `!deploy guild` or `!deploy global` to deploy the commands.
 
 ### Useful Information
 
-- Deploying in the guild happens instantly but the commands can only be used in that guild. Deploying globally can take up to an hour due to Discord's caching.  
-  - If you deployed both globally and in a guild, you will see every command twice. In that case, just send `!undeploy guild`!
+- The bot should automatically deploy the slash commands globally. If they don't appear:
+  - If you're getting `DiscordAPIError: Missing Access`, you probably forgot to add the `applications.commands` scope in step 1
+  - Discord global commands can take up to 1h to update due to caching. If you don't want to wait, send `@bot !deploy guild` in a text channel the bot can see (`@bot` being you @mentionning your bot). This will deploy the commands immediately in that guild.
+  - If you see every command twice, just send `@bot !undeploy guild`!
 
 - By default, the bot doesn't store your username/password, it only uses them to get the cookies that can be used to generate access tokens needed to get your shop.  
+  - Your cookies are only stored on your hard drive, and are only ever sent to official Riot servers.
   - You can log in using [your auth.riotgames.com cookies](https://github.com/giorgi-o/SkinPeek/wiki/How-to-get-your-Riot-cookies) using `/cookies` to avoid sending your password, and you can delete your account from the bot using `/forget`.  
   - Obviously, only log in if you trust whoever is hosting the bot, as they can theoretically do anything with your account.
+
+- Once you're more or less familiar with how the bot works, you should read the [Admin Guide](https://github.com/giorgi-o/SkinPeek/wiki/SkinPeek-Admin-Guide) for advanced usage and tips & tricks for hosting the bot.
 
 - If you're bored, check out [this writeup](https://gist.github.com/giorgi-o/e0fc2f6160a5fd43f05be8567ad6fdd7) on how Riot treats third-party projects like this one.
 
 ### Replit
 
 [![Run on Repl.it](https://replit.com/badge/github/Gam3rBoy57/SkinPeekReplit)](https://replit.com/github/Gam3rBoy57/SkinPeekReplit)  
-Thanks to Gam3rBoy57 for maintaining the Replit version!  
+Thanks to [Gam3rBoy57](https://linktr.ee/Gam3rBoy57) for maintaining the Replit version!  
 **Note:** You will probably have to `/login` every day, and your alerts most likely won't work. Read more [here](https://github.com/giorgi-o/SkinPeek/pull/46#issuecomment-1213579690).
 
 
@@ -75,7 +80,7 @@ Thanks to Gam3rBoy57 for maintaining the Replit version!
 
 For advanced users who want to deploy the bot using [Docker](https://www.docker.com/):
 
-- [Create a discord bot](https://discordjs.guide/preparations/setting-up-a-bot-application.html#creating-your-bot) and [add it to your server](https://discordjs.guide/preparations/adding-your-bot-to-servers.html#creating-and-using-your-invite-link) with the  bot and `applications.commands` scope
+- [Create a discord bot](https://discordjs.guide/preparations/setting-up-a-bot-application.html#creating-your-bot) and [add it to your server](https://discordjs.guide/preparations/adding-your-bot-to-servers.html#creating-and-using-your-invite-link) with the `bot` and `applications.commands` scope
 - Create a docker-compose file like [this](https://github.com/giorgi-o/SkinPeek/blob/master/docker-compose.yml) and a config file like [this](https://github.com/giorgi-o/SkinPeek/blob/master/config.json.example)
 - Put your bot token in [config.json](https://github.com/giorgi-o/SkinPeek/blob/master/config.json.example)
 - Use `docker-compose up -d` to start the bot, `docker-compose logs -f` to see the logs and `docker-compose down` to stop it.
@@ -113,9 +118,9 @@ Special thanks to [Mistral](https://github.com/blongnh), [Jukki](https://github.
 
 ## Translations
 
-If you are fluent in another language and would like help translate the bot, please do!
+If you are fluent in another language and would like help translate the bot, either to a new language or to improve an existing translation, please do!
 
-1. Look up the language code for your language [here](https://discord.com/developers/docs/reference#locales)
+1. Look up the language code for your language [here](https://discord.com/developers/docs/reference#locales) or [here](http://www.lingoes.net/en/translator/langcode.htm)
 2. Look in the bot's `languages` folder
 3. If you're starting from scratch, copy the `en-GB.json` file and rename it to your language code
 4. Open the file and do the thing

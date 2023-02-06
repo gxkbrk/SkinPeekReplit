@@ -10,20 +10,23 @@ import {
 import config from "../misc/config.js";
 import fs from "fs";
 import {client} from "../discord/bot.js";
-import {addUser, deleteUser, getAccountWithPuuid, getUserJson, saveUser} from "./accountSwitcher.js";
+import {addUser, deleteUser, getAccountWithPuuid, getUserJson, readUserJson, saveUser} from "./accountSwitcher.js";
 import {checkRateLimit, isRateLimited} from "../misc/rateLimit.js";
+import {queueCookiesLogin, queueUsernamePasswordLogin} from "./authQueue.js";
+import {waitForAuthQueueResponse} from "../discord/authManager.js";
 
-class User {
-    constructor({id, puuid, auth, alerts=[], username, region, locale, authFailures}) {
+export class User {
+    constructor({id, puuid, auth, alerts=[], username, region, authFailures, lastFetchedData}) {
         this.id = id;
         this.puuid = puuid;
         this.auth = auth;
         this.alerts = alerts || [];
         this.username = username;
         this.region = region;
-        this.locale = locale;
         this.authFailures = authFailures || 0;
+        this.lastFetchedData = lastFetchedData || 0;
     }
+
 }
 
 export const transferUserDataFromOldUsersJson = () => {
@@ -51,8 +54,7 @@ export const transferUserDataFromOldUsersJson = () => {
             },
             alerts: alertsForUser(id).map(alert => {return {uuid: alert.uuid, channel_id: alert.channel_id}}),
             username: userData.username,
-            region: userData.region,
-            locale: userData.locale
+            region: userData.region
         });
         saveUser(user);
     }
@@ -60,6 +62,15 @@ export const transferUserDataFromOldUsersJson = () => {
 }
 
 export const getUser = (id, account=null) => {
+    if(id instanceof User) {
+        const user = id;
+        const userJson = readUserJson(user.id);
+        if(!userJson) return null;
+
+        const userData = userJson.accounts.find(a => a.puuid === user.puuid);
+        return userData && new User(userData);
+    }
+
     try {
         const userData = getUserJson(id, account);
         return userData && new User(userData);
@@ -72,12 +83,6 @@ const userFilenameRegex = /\d+\.json/
 export const getUserList = () => {
     ensureUsersFolder();
     return fs.readdirSync("data/users").filter(filename => userFilenameRegex.test(filename)).map(filename => filename.replace(".json", ""));
-}
-
-export const setUserLocale = (user, locale) => {
-    if(user.locale === locale) return;
-    user.locale = locale;
-    saveUser(user);
 }
 
 export const authUser = async (id, account=null) => {
@@ -104,11 +109,15 @@ export const redeemUsernamePassword = async (id, login, password) => {
             'user-agent': await getUserAgent()
         },
         body: JSON.stringify({
-            'client_id': 'play-valorant-web-prod',
-            'response_type': 'token id_token',
-            'redirect_uri': 'https://playvalorant.com/opt_in',
-            'scope': 'account openid',
-            'nonce': '1',
+            "client_id": "riot-client",
+            "code_challenge": "",
+            "code_challenge_method": "",
+            "acr_values": "",
+            "claims": "",
+            "nonce": "69420",
+            "redirect_uri": "http://localhost/redirect",
+            "response_type": "token id_token",
+            "scope": "openid link ban lol_region"
         })
     });
     console.assert(req1.statusCode === 200, `Auth Request Cookies status code is ${req1.statusCode}!`, req1);
@@ -143,7 +152,6 @@ export const redeemUsernamePassword = async (id, login, password) => {
         ...parseSetCookie(req2.headers['set-cookie'])
     };
 
-    console.error(req2)
     const json2 = JSON.parse(req2.body);
     if(json2.type === 'error') {
         if(json2.error === "auth_failure") console.error("Authentication failure!", json2);
@@ -152,7 +160,7 @@ export const redeemUsernamePassword = async (id, login, password) => {
     }
 
     if(json2.type === 'response') {
-        const user = await processAuthResponse(id, {login, password, cookies}, json2);
+        const user = await processAuthResponse(id, {login, password, cookies}, json2.response.parameters.uri);
         addUser(user);
         return {success: true};
     } else if(json2.type === 'multifactor') { // 2FA
@@ -215,7 +223,7 @@ export const redeem2FACode = async (id, code) => {
         return {success: false};
     }
 
-    user = await processAuthResponse(id, {login: user.auth.login, password: atob(user.auth.password || ""), cookies: user.auth.cookies}, json, user);
+    user = await processAuthResponse(id, {login: user.auth.login, password: atob(user.auth.password || ""), cookies: user.auth.cookies}, json.response.parameters.uri, user);
 
     delete user.auth.waiting2FA;
     addUser(user);
@@ -223,9 +231,9 @@ export const redeem2FACode = async (id, code) => {
     return {success: true};
 }
 
-const processAuthResponse = async (id, authData, resp, user=null) => {
+const processAuthResponse = async (id, authData, redirect, user=null) => {
     if(!user) user = new User({id});
-    const [rso, idt] = extractTokensFromUri(resp.response.parameters.uri);
+    const [rso, idt] = extractTokensFromUri(redirect);
     user.auth = {
         ...user.auth,
         rso: rso,
@@ -233,7 +241,7 @@ const processAuthResponse = async (id, authData, resp, user=null) => {
     }
 
     // save either cookies or login/password
-    if(config.storePasswords && !user.auth.waiting2FA) { // don't store login/password for people with 2FA
+    if(authData.login && config.storePasswords && !user.auth.waiting2FA) { // don't store login/password for people with 2FA
         user.auth.login = authData.login;
         user.auth.password = btoa(authData.password);
         delete user.auth.cookies;
@@ -252,10 +260,8 @@ const processAuthResponse = async (id, authData, resp, user=null) => {
     }
 
     // get username
-    if(!user.username) {
-        const userInfo = await getUserInfo(user);
-        user.username = userInfo.username;
-    }
+    const userInfo = await getUserInfo(user);
+    user.username = userInfo.username;
 
     // get entitlements token
     if(!user.auth.ent) user.auth.ent = await getEntitlements(user);
@@ -263,10 +269,13 @@ const processAuthResponse = async (id, authData, resp, user=null) => {
     // get region
     if(!user.region) user.region = await getRegion(user);
 
+    user.lastFetchedData = Date.now();
+
+    user.authFailures = 0;
     return user;
 }
 
-const getUserInfo = async (user) => {
+export const getUserInfo = async (user) => {
     const req = await fetch("https://auth.riotgames.com/userinfo", {
         headers: {
             'Authorization': "Bearer " + user.auth.rso
@@ -295,7 +304,7 @@ const getEntitlements = async (user) => {
     return json.entitlements_token;
 }
 
-const getRegion = async (user) => {
+export const getRegion = async (user) => {
     const req = await fetch("https://riot-geo.pas.si.riotgames.com/pas/v1/product/valorant", {
         method: "PUT",
         headers: {
@@ -316,8 +325,6 @@ export const redeemCookies = async (id, cookies) => {
     let rateLimit = isRateLimited("auth.riotgames.com");
     if(rateLimit) return {success: false, rateLimit: rateLimit};
 
-    const user = new User({id});
-
     const req = await fetch("https://auth.riotgames.com/authorize?redirect_uri=https%3A%2F%2Fplayvalorant.com%2Fopt_in&client_id=play-valorant-web-prod&response_type=token%20id_token&scope=account%20openid&nonce=1", {
         headers: {
             'user-agent': await getUserAgent(),
@@ -326,42 +333,39 @@ export const redeemCookies = async (id, cookies) => {
     });
     console.assert(req.statusCode === 303, `Cookie Reauth status code is ${req.statusCode}!`, req);
 
-    rateLimit = checkRateLimit(req, "auth.riotgames.com")
+    rateLimit = checkRateLimit(req, "auth.riotgames.com");
     if(rateLimit) return {success: false, rateLimit: rateLimit};
 
-    if(req.headers.location.startsWith("/login")) return false; // invalid cookies
+    if(req.headers.location.startsWith("/login")) return {success: false}; // invalid cookies
 
-    if(!user.auth) user.auth = {};
-    if(!user.auth.login || !user.auth.password) user.auth.cookies = {
-        ...user.auth.cookies,
+    cookies = {
+        ...parseSetCookie(cookies),
         ...parseSetCookie(req.headers['set-cookie'])
-    };
+    }
 
-    const [rso, idt] = extractTokensFromUri(req.headers.location);
-    user.auth.rso = rso;
-    user.auth.idt = idt;
-
-    const userInfo = await getUserInfo(user);
-    user.puuid = userInfo.puuid;
-    user.username = userInfo.username;
-    user.auth.ent = await getEntitlements(user);
-    user.region = await getRegion(user);
-
+    const user = await processAuthResponse(id, {cookies}, req.headers.location);
     addUser(user);
 
-    return true;
+    return {success: true};
 }
 
 export const refreshToken = async (id, account=null) => {
     let response = {success: false}
 
-    const user = getUser(id, account);
+    let user = getUser(id, account);
     if(!user) return response;
 
-    if(user.auth.cookies) response.success = await redeemCookies(id, stringifyCookies(user.auth.cookies));
-    if(!response.success && user.auth.login && user.auth.password) response = await redeemUsernamePassword(id, user.auth.login, atob(user.auth.password));
+    if(user.auth.cookies) {
+        response = await queueCookiesLogin(id, stringifyCookies(user.auth.cookies));
+        if(response.inQueue) response = await waitForAuthQueueResponse(response);
+    }
+    if(!response.success && user.auth.login && user.auth.password) {
+        response = await queueUsernamePasswordLogin(id, user.auth.login, atob(user.auth.password));
+        if(response.inQueue) response = await waitForAuthQueueResponse(response);
+    }
 
     if(!response.success && !response.mfa && !response.rateLimit) deleteUserAuth(user);
+
     return response;
 }
 

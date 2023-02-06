@@ -7,6 +7,7 @@ import fs from "fs";
 import {DEFAULT_LANG, l, valToDiscLang} from "./languages.js";
 import {client} from "../discord/bot.js";
 import {getUser} from "../valorant/auth.js";
+import config from "./config.js";
 
 const tlsCiphers = [
     'TLS_CHACHA20_POLY1305_SHA256',
@@ -42,7 +43,7 @@ const tlsSigAlgs = [
 
 // all my homies hate node-fetch
 export const fetch = (url, options={}) => {
-    // console.log("Fetching url " + url);
+    if(config.logUrls) console.log("Fetching url " + url.substring(0, 200) + (url.length > 200 ? "..." : ""));
     return new Promise((resolve, reject) => {
         const req = https.request(url, {
             method: options.method || "GET",
@@ -128,7 +129,10 @@ export const stringifyCookies = (cookies) => {
 
 export const extractTokensFromUri = (uri) => {
     // thx hamper for regex
-    const [, accessToken, idToken] = uri.match(/access_token=((?:[a-zA-Z]|\d|\.|-|_)*).*id_token=((?:[a-zA-Z]|\d|\.|-|_)*).*expires_in=(\d*)/);
+    const match = uri.match(/access_token=((?:[a-zA-Z]|\d|\.|-|_)*).*id_token=((?:[a-zA-Z]|\d|\.|-|_)*).*expires_in=(\d*)/);
+    if(!match) return [null, null];
+
+    const [, accessToken, idToken] = match;
     return [accessToken, idToken]
 }
 
@@ -221,8 +225,8 @@ export const defer = async (interaction, ephemeral=false) => {
     interaction.deferred = true;
 }
 
-export const skinNameAndEmoji = async (skin, channel, locale=DEFAULT_LANG) => {
-    const name = l(skin.names, locale);
+export const skinNameAndEmoji = async (skin, channel, localeOrInteraction=DEFAULT_LANG) => {
+    const name = l(skin.names, localeOrInteraction);
     if(!skin.rarity) return name;
 
     const rarity = await getRarity(skin.rarity, channel);
@@ -302,3 +306,5 @@ export const ensureUsersFolder = () => {
     if(!fs.existsSync("data")) fs.mkdirSync("data");
     if(!fs.existsSync("data/users")) fs.mkdirSync("data/users");
 }
+
+export const findKeyOfValue = (obj, value) => Object.keys(obj).find(key => obj[key] === value);
