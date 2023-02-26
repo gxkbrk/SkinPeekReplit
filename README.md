@@ -1,3 +1,5 @@
+# You'll have to change some files. A tutorial on how to setup the bot: https://youtu.be/QurxfgObYT8
+
 ## IF YOU NEED ANY HELP, DM ME ON DISCORD: Gam3rBoy57ツ#9948
 
 # SkinPeek
