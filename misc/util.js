@@ -1,13 +1,15 @@
 import {rarityEmoji} from "../discord/emoji.js";
-import {MessageActionRow, MessageButton, Permissions, Util} from "discord.js";
+import {ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionsBitField} from "discord.js";
 import {getItem, getRarity} from "../valorant/cache.js";
 
 import https from "https";
+import http from "http";
 import fs from "fs";
 import {DEFAULT_LANG, l, valToDiscLang} from "./languages.js";
 import {client} from "../discord/bot.js";
 import {getUser} from "../valorant/auth.js";
 import config from "./config.js";
+import {checkRateLimit} from "./rateLimit.js";
 
 const tlsCiphers = [
     'TLS_CHACHA20_POLY1305_SHA256',
@@ -44,17 +46,20 @@ const tlsSigAlgs = [
 // all my homies hate node-fetch
 export const fetch = (url, options={}) => {
     if(config.logUrls) console.log("Fetching url " + url.substring(0, 200) + (url.length > 200 ? "..." : ""));
+
     return new Promise((resolve, reject) => {
         const req = https.request(url, {
+            agent: options.proxy,
             method: options.method || "GET",
             headers: {
                 cookie: "dummy=cookie", // set dummy cookie, helps with cloudflare 1020
                 "Accept-Language": "en-US,en;q=0.5", // same as above
+                "referer": "https://github.com/giorgi-o/SkinPeek", // to help other APIs (e.g. Spirit's) see where the traffic is coming from
                 ...options.headers
             },
             ciphers: tlsCiphers.join(':'),
             sigalgs: tlsSigAlgs.join(':'),
-            minVersion: "TLSv1.3"
+            minVersion: "TLSv1.3",
         }, resp => {
             const res = {
                 statusCode: resp.statusCode,
@@ -80,6 +85,277 @@ export const fetch = (url, options={}) => {
     });
 }
 
+const ProxyType = {
+    HTTPS: "https",
+    // SOCKS4: "socks4", // not supported yet
+    // SOCKS5: "socks5", // not supported yet
+}
+
+class Proxy {
+    constructor({manager, type, host, port, username, password}) {
+        this.manager = manager;
+        this.type = type || ProxyType.HTTPS;
+        this.host = host;
+        this.port = port;
+        this.username = username;
+        this.password = password;
+
+        this.publicIp = null;
+    }
+
+    createAgent(hostname) {
+        if(this.type !== ProxyType.HTTPS) throw new Error("Unsupported proxy type " + this.type);
+
+        return new Promise((resolve, reject) => {
+        const headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+            "Host": hostname,
+        };
+        if(this.username && this.password) {
+            headers["Proxy-Authorization"] = "Basic " + Buffer.from(this.username + ":" + this.password).toString("base64");
+        }
+
+        const req = http.request({
+            host: this.host,
+            port: this.port,
+            method: "CONNECT",
+            path: hostname + ":443",
+            headers: headers,
+            timeout: 10,
+        });
+        console.log(`Sent proxy connection request to ${this.host}:${this.port} for ${hostname}`);
+
+        req.on("connect", (res, socket) => {
+            console.log(`Proxy ${this.host}:${this.port} connected to ${hostname}!`);
+            if (res.statusCode !== 200) {
+                reject(`Proxy ${this.host}:${this.port} returned status code ${res.statusCode}!`);
+            }
+
+            socket.on("error", err => {
+                console.error(`Proxy ${this.host}:${this.port} socket errored: ${err}`);
+                this.manager.proxyIsDead(this, hostname);
+            });
+
+            const agent = new https.Agent({ socket });
+            resolve(agent);
+        });
+
+        req.on("error", err => {
+            reject(`Proxy ${this.host}:${this.port} errored: ${err}`);
+        });
+
+        req.end();
+        });
+    }
+
+    async test() {
+        const res = await fetch("https://api.ipify.org", {proxy: await this.createAgent("api.ipify.org")});
+
+        if(res.statusCode !== 200) {
+            console.error(`Proxy ${this.host}:${this.port} returned status code ${res.statusCode}!`);
+            return false;
+        }
+
+        const ip = res.body.trim();
+        if(!ip) {
+            console.error(`Proxy ${this.host}:${this.port} returned no IP!`);
+            return false;
+        }
+
+        this.publicIp = ip;
+        return true;
+    }
+}
+
+class ProxyManager {
+    constructor() {
+        this.allProxies = [];
+
+        this.activeProxies = {
+            "example.com": []
+        };
+        this.deadProxies = [];
+
+        this.enabled = false;
+    }
+
+    async loadProxies() {
+        const proxyFile = await asyncReadFile("data/proxies.txt").catch(_ => {});
+        if(!proxyFile) return;
+
+        let type = ProxyType.HTTPS;
+        let username = null;
+        let password = null;
+
+        // for each line in proxies.txt
+        for(const line of proxyFile.toString().split("\n")) {
+            const trimmed = line.trim();
+            if(!trimmed.length || trimmed.startsWith("#")) continue;
+
+            // split by colons
+            const parts = trimmed.split(":");
+            if(parts.length < 2) continue;
+
+            // first part is the proxy host
+            const host = parts[0];
+            if(!host.length) continue;
+
+            // second part is the proxy port
+            const port = parseInt(parts[1]);
+            if(isNaN(port)) continue;
+
+            // third part is the proxy type
+            type = parts[2]?.toLowerCase() || ProxyType.HTTPS;
+            if(type !== ProxyType.HTTPS) {
+                console.error(`Unsupported proxy type ${type}!`);
+                type = ProxyType.HTTPS;
+                continue;
+            }
+
+            // fourth part is the proxy username
+            username = parts[3] || null;
+
+            // fifth part is the proxy password
+            password = parts[4] || null;
+
+            // create the proxy object
+            const proxy = new Proxy({
+                type, host, port, username, password,
+                manager: this
+            });
+
+            // add it to the list of all proxies
+            this.allProxies.push(proxy);
+        }
+
+        this.enabled = this.allProxies.length > 0;
+    }
+
+    async loadForHostname(hostname) {
+        if(!this.enabled) return;
+
+        // called both to load the initial set of proxies for a hostname,
+        // and to repopulate the list if the current set has an invalid one
+
+        const activeProxies = this.activeProxies[hostname] || [];
+        const promises = [];
+
+        const proxyFailed = async proxy => {
+            this.deadProxies.push(proxy);
+        }
+
+        for(const proxy of this.allProxies) {
+            if(!this.allProxies.length) break;
+            if(activeProxies.length >= config.maxActiveProxies) break;
+            if(activeProxies.includes(proxy)) continue;
+            if(this.deadProxies.includes(proxy)) continue;
+
+            /*try {
+                const proxyWorks = await proxy.test();
+                if(!proxyWorks) {
+                    this.deadProxies.push(proxy);
+                    continue;
+                }
+
+                await proxy.createAgent(hostname);
+                activeProxies.push(proxy);
+            } catch(err) {
+                console.error(err);
+                this.deadProxies.push(proxy);
+            }*/
+
+            let timedOut = false;
+            const promise = proxy.test().then(proxyWorks => {
+                if(!proxyWorks) return Promise.reject(`Proxy ${proxy.host}:${proxy.port} failed!`);
+                if(timedOut) return Promise.reject();
+
+                return proxy.createAgent(hostname);
+            }).then((/*agent*/) => {
+                if(timedOut) return;
+
+                activeProxies.push(proxy);
+            }).catch(err => {
+                if(err) console.error(err);
+                proxyFailed(proxy);
+            });
+
+            const promiseWithTimeout = promiseTimeout(promise, 5000).then(res => {
+                if(res === null) {
+                    timedOut = true;
+                    console.error(`Proxy ${proxy.host}:${proxy.port} timed out!`);
+                }
+            });
+            promises.push(promiseWithTimeout);
+        }
+
+        await Promise.all(promises);
+
+        if(!activeProxies.length) {
+            console.error(`No working proxies found!`);
+            return;
+        }
+
+        console.log(`Loaded ${activeProxies.length} proxies for ${hostname}`);
+        this.activeProxies[hostname] = activeProxies;
+
+        return activeProxies;
+    }
+
+    async getProxy(hostname) {
+        if(!this.enabled) return null;
+
+        const activeProxies = await this.loadForHostname(hostname);
+        if(!activeProxies?.length) return null;
+
+        let proxy;
+        do {
+            proxy = activeProxies.shift();
+        } while(this.deadProxies.includes(proxy));
+        if(!proxy) return null;
+
+        activeProxies.push(proxy);
+        return proxy;
+    }
+
+    async getProxyForUrl(url) {
+        const hostname = new URL(url).hostname;
+        return this.getProxy(hostname);
+    }
+
+    async proxyIsDead(proxy, hostname) {
+        this.deadProxies.push(proxy);
+        await this.loadForHostname(hostname);
+    }
+
+    async fetch(url, options = {}) {
+        // if(!this.enabled) return await fetch(url, options);
+        if(!this.enabled) return;
+
+        const hostname = new URL(url).hostname;
+        const proxy = await this.getProxy(hostname);
+        if(!proxy) return await fetch(url, options);
+
+        const agent = await proxy.createAgent(hostname);
+        const req = await fetch(url, {
+            ...options,
+            proxy: agent.createConnection
+        });
+
+        // test for 1020 or rate limit
+        const hostnameAndProxy = `${new URL(url).hostname} proxy=${proxy.host}:${proxy.port}`
+        if(req.statusCode === 403 && req.body === "error code: 1020" || checkRateLimit(req, hostnameAndProxy)) {
+            console.error(`Proxy ${proxy.host}:${proxy.port} is dead!`);
+            console.error(req);
+            await this.proxyIsDead(proxy, hostname);
+            return await this.fetch(url, options);
+        }
+    }
+}
+
+const proxyManager = new ProxyManager();
+export const initProxyManager = async () => await proxyManager.loadProxies();
+export const getProxyManager = () => proxyManager;
+
 // file utils
 
 export const asyncReadFile = (path) => {
@@ -96,6 +372,53 @@ export const asyncReadJSONFile = async (path) => {
 }
 
 // riot utils
+
+export const WeaponType = {
+    Classic: "Classic",
+    Shorty: "Shorty",
+    Frenzy: "Frenzy",
+    Ghost: "Ghost",
+    Sheriff: "Sheriff",
+
+    Stinger: "Stinger",
+    Spectre: "Spectre",
+    Bucky: "Bucky",
+    Judge: "Judge",
+
+    Bulldog: "Bulldog",
+    Guardian: "Guardian",
+    Phantom: "Phantom",
+    Vandal: "Vandal",
+
+    Marshal: "Marshal",
+    Outlaw: "Outlaw",
+    Operator: "Operator",
+    Ares: "Ares",
+    Odin: "Odin",
+    Knife: "Knife",
+}
+
+export const WeaponTypeUuid = {
+    [WeaponType.Odin]: "63e6c2b6-4a8e-869c-3d4c-e38355226584",
+    [WeaponType.Ares]: "55d8a0f4-4274-ca67-fe2c-06ab45efdf58",
+    [WeaponType.Vandal]: "9c82e19d-4575-0200-1a81-3eacf00cf872",
+    [WeaponType.Bulldog]: "ae3de142-4d85-2547-dd26-4e90bed35cf7",
+    [WeaponType.Phantom]: "ee8e8d15-496b-07ac-e5f6-8fae5d4c7b1a",
+    [WeaponType.Judge]: "ec845bf4-4f79-ddda-a3da-0db3774b2794",
+    [WeaponType.Bucky]: "910be174-449b-c412-ab22-d0873436b21b",
+    [WeaponType.Frenzy]: "44d4e95c-4157-0037-81b2-17841bf2e8e3",
+    [WeaponType.Classic]: "29a0cfab-485b-f5d5-779a-b59f85e204a8",
+    [WeaponType.Ghost]: "1baa85b4-4c70-1284-64bb-6481dfc3bb4e",
+    [WeaponType.Sheriff]: "e336c6b8-418d-9340-d77f-7a9e4cfe0702",
+    [WeaponType.Shorty]: "42da8ccc-40d5-affc-beec-15aa47b42eda",
+    [WeaponType.Operator]: "a03b24d3-4319-996d-0f8c-94bbfba1dfc7",
+    [WeaponType.Guardian]: "4ade7faa-4cf1-8376-95ef-39884480959b",
+    [WeaponType.Marshal]: "c4883e50-4494-202c-3ec3-6b8a9284f00b",
+    [WeaponType.Outlaw]: "5f0aaf7a-4289-3998-d5ff-eb9a5cf7ef5c",
+    [WeaponType.Spectre]: "462080d1-4035-2937-7c09-27aa2a5c27a7",
+    [WeaponType.Stinger]: "f7e1b454-4ad4-1063-ec0a-159e56b58941",
+    [WeaponType.Knife]: "2f59173c-4bed-b6c3-2191-dea9b58be9c7",
+}
 
 export const itemTypes = {
     SKIN: "e7c63390-eda7-46e0-bb7a-a6abdacd2433",
@@ -217,6 +540,8 @@ export const getPuuid = (id, account=null) => {
     return getUser(id, account).puuid;
 }
 
+export const isDefaultSkin = (skin) => skin.skinUuid === skin.defaultSkinUuid;
+
 // discord utils
 
 export const defer = async (interaction, ephemeral=false) => {
@@ -236,21 +561,21 @@ export const skinNameAndEmoji = async (skin, channel, localeOrInteraction=DEFAUL
     return rarityIcon ? `${rarityIcon} ${name}` : name;
 }
 
-export const actionRow = (button) => new MessageActionRow().addComponents(button);
+export const actionRow = (button) => new ActionRowBuilder().addComponents(button);
 
-export const removeAlertButton = (id, uuid, buttonText) => new MessageButton().setCustomId(`removealert/${uuid}/${id}/${Math.round(Math.random() * 100000)}`).setStyle("DANGER").setLabel(buttonText).setEmoji("✖");
-export const removeAlertActionRow = (id, uuid, buttonText) => new MessageActionRow().addComponents(removeAlertButton(id, uuid, buttonText));
+export const removeAlertButton = (id, uuid, buttonText) => new ButtonBuilder().setCustomId(`removealert/${uuid}/${id}/${Math.round(Math.random() * 100000)}`).setStyle(ButtonStyle.Danger).setLabel(buttonText).setEmoji("✖");
+export const removeAlertActionRow = (id, uuid, buttonText) => new ActionRowBuilder().addComponents(removeAlertButton(id, uuid, buttonText));
 
-export const retryAuthButton = (id, operationId, buttonText) => new MessageButton().setCustomId(`retry_auth/${operationId}`).setStyle("PRIMARY").setLabel(buttonText).setEmoji("🔄");
+export const retryAuthButton = (id, operationId, buttonText) => new ButtonBuilder().setCustomId(`retry_auth/${operationId}`).setStyle(ButtonStyle.Danger).setLabel(buttonText).setEmoji("🔄");
 
-export const externalEmojisAllowed = (channel) => !channel || !channel.guild || channel.permissionsFor(channel.guild.roles.everyone).has(Permissions.FLAGS.USE_EXTERNAL_EMOJIS);
-export const canCreateEmojis = (guild) => guild && guild.me && guild.me.permissions.has(Permissions.FLAGS.MANAGE_EMOJIS_AND_STICKERS);
+export const externalEmojisAllowed = (channel) => !channel || !channel.guild || channel.permissionsFor(channel.guild.roles.everyone).has(PermissionsBitField.Flags.UseExternalEmojis);
+export const canCreateEmojis = (guild) => guild && guild.members.me && guild.members.me.permissions.has(PermissionsBitField.Flags.ManageEmojisAndStickers);
 export const emojiToString = (emoji) => emoji && `<:${emoji.name}:${emoji.id}>`;
 
 export const canSendMessages = (channel) => {
     if(!channel || !channel.guild) return true;
-    const permissions = channel.permissionsFor(channel.guild.me);
-    return permissions.has(Permissions.FLAGS.VIEW_CHANNEL) && permissions.has(Permissions.FLAGS.SEND_MESSAGES) && permissions.has(Permissions.FLAGS.EMBED_LINKS);
+    const permissions = channel.permissionsFor(channel.guild.members.me);
+    return permissions.has(PermissionsBitField.Flags.ViewChannel) && permissions.has(PermissionsBitField.Flags.SendMessages) && permissions.has(PermissionsBitField.Flags.EmbedLinks);
 }
 
 export const fetchChannel = async (channelId) => {
@@ -290,11 +615,13 @@ export const discordTag = id => {
     return user ? `${user.username}#${user.discriminator}` : id;
 }
 
-export const escapeMarkdown = Util.escapeMarkdown;
-
 // misc utils
 
 export const wait = ms => new Promise(r => setTimeout(r, ms));
+
+export const promiseTimeout = async (promise, ms, valueIfTimeout=null) => {
+    return await Promise.race([promise, wait(ms).then(() => valueIfTimeout)]);
+}
 
 export const isToday = (timestamp) => isSameDay(timestamp, Date.now());
 export const isSameDay = (t1, t2) => {
@@ -308,3 +635,10 @@ export const ensureUsersFolder = () => {
 }
 
 export const findKeyOfValue = (obj, value) => Object.keys(obj).find(key => obj[key] === value);
+
+export const calcLength = (any) => {
+    if(!isNaN(any)) any = any.toString();
+    return any.length;
+}
+
+export const ordinalSuffix = (number) => number % 100 >= 11 && number % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][(number % 10 < 4) ? number % 10 : 0];

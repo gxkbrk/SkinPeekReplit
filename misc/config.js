@@ -12,6 +12,7 @@ export const loadConfig = (filename="config.json") => {
         try {
             fs.readFileSync(filename + ".example", 'utf-8');
             console.error(`You forgot to rename ${filename}.example to ${filename}!`);
+            console.error(`(Hint: If you can only see ${filename}, try enabling "file name extensions" in file explorer)`)
         } catch(e1) {
             console.error(`Could not find ${filename}!`, e);
         }
@@ -25,33 +26,46 @@ export const loadConfig = (filename="config.json") => {
     if(!loadedConfig.token || loadedConfig.token === "token goes here")
         return console.error("You forgot to put your bot token in config.json!");
 
+    if(loadedConfig.HDevTokenAlert && !loadedConfig.HDevToken || loadedConfig.HDevToken === ""){
+        console.error("You forgot to put your HDevToken in config.json!");
+        console.error("The Profile command works without an HDEV token, but you can view up to 2 different accounts per hour.");
+        console.error("If you need more than 2 accounts per hour, see https://discord.gg/B7AarTMZMK");
+        console.error("If you don't want to see this notification again, set HDevTokenAlert to false in config.json file");
+    }
+
     loadedConfig.fetchSkinPrices = loadedConfig.showSkinPrices;
     loadedConfig.fetchSkinRarities = loadedConfig.showSkinRarities;
 
     applyConfig(loadedConfig, "token", "token goes here");
+    applyConfig(loadedConfig, "HDevToken", "");
+    applyConfig(loadedConfig, "HDevTokenAlert", true);
+    //TODO applyConfig(loadedConfig, "useUnofficialValorantApi", true);
     applyConfig(loadedConfig, "fetchSkinPrices", true);
     applyConfig(loadedConfig, "fetchSkinRarities", true);
+    applyConfig(loadedConfig, "localiseText", true);
     applyConfig(loadedConfig, "localiseSkinNames", true);
     applyConfig(loadedConfig, "linkItemImage", true);
+    applyConfig(loadedConfig, "videoViewerWithSite", true);
+    applyConfig(loadedConfig, "imageViewerWithSite", false);
     applyConfig(loadedConfig, "useEmojisFromServer", "");
     applyConfig(loadedConfig, "refreshSkins", "10 0 0 * * *");
     applyConfig(loadedConfig, "checkGameVersion", "*/15 * * * *");
     applyConfig(loadedConfig, "updateUserAgent", "*/15 * * * *");
     applyConfig(loadedConfig, "delayBetweenAlerts", 5 * 1000);
     applyConfig(loadedConfig, "alertsPerPage", 10);
+    applyConfig(loadedConfig, "careerCacheExpiration", 10 * 60 * 1000);
     applyConfig(loadedConfig, "emojiCacheExpiration", 10 * 1000);
     applyConfig(loadedConfig, "loadoutCacheExpiration", 10 * 60 * 1000);
     applyConfig(loadedConfig, "useShopCache", true);
     applyConfig(loadedConfig, "useLoginQueue", false);
-    applyConfig(loadedConfig, "loginQueue", "*/3 * * * * *");
+    applyConfig(loadedConfig, "loginQueueInterval", 3000);
+    applyConfig(loadedConfig, "loginQueuePollRate", 2000);
     applyConfig(loadedConfig, "loginRetryTimeout", 10 * 60 * 1000);
     applyConfig(loadedConfig, "authFailureStrikes", 2);
     applyConfig(loadedConfig, "maxAccountsPerUser", 5);
     applyConfig(loadedConfig, "userDataCacheExpiration", 168);
     applyConfig(loadedConfig, "rateLimitBackoff", 60);
     applyConfig(loadedConfig, "rateLimitCap", 10 * 60);
-    applyConfig(loadedConfig, "useShopQueue", false);
-    applyConfig(loadedConfig, "shopQueue", "*/1 * * * * *");
     applyConfig(loadedConfig, "useMultiqueue", false);
     applyConfig(loadedConfig, "storePasswords", false);
     applyConfig(loadedConfig, "trackStoreStats", true);
@@ -62,7 +76,10 @@ export const loadConfig = (filename="config.json") => {
     applyConfig(loadedConfig, "ownerId", "");
     applyConfig(loadedConfig, "ownerName", "");
     applyConfig(loadedConfig, "status", "Up and running!");
+    applyConfig(loadedConfig, "notice", "");
+    applyConfig(loadedConfig, "onlyShowNoticeOnce", true);
     applyConfig(loadedConfig, "maintenanceMode", false);
+    applyConfig(loadedConfig, "githubToken", "");
     applyConfig(loadedConfig, "logToChannel", "");
     applyConfig(loadedConfig, "logFrequency", "*/10 * * * * *");
     applyConfig(loadedConfig, "logUrls", false);

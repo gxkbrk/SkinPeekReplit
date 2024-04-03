@@ -5,7 +5,7 @@ import {
     extractTokensFromUri,
     tokenExpiry,
     decodeToken,
-    ensureUsersFolder
+    ensureUsersFolder, wait, getProxyManager
 } from "../misc/util.js";
 import config from "../misc/config.js";
 import fs from "fs";
@@ -16,7 +16,7 @@ import {queueCookiesLogin, queueUsernamePasswordLogin} from "./authQueue.js";
 import {waitForAuthQueueResponse} from "../discord/authManager.js";
 
 export class User {
-    constructor({id, puuid, auth, alerts=[], username, region, authFailures, lastFetchedData}) {
+    constructor({id, puuid, auth, alerts=[], username, region, authFailures, lastFetchedData, lastNoticeSeen, lastSawEasterEgg}) {
         this.id = id;
         this.puuid = puuid;
         this.auth = auth;
@@ -25,8 +25,9 @@ export class User {
         this.region = region;
         this.authFailures = authFailures || 0;
         this.lastFetchedData = lastFetchedData || 0;
+        this.lastNoticeSeen =  lastNoticeSeen || "";
+        this.lastSawEasterEgg = lastSawEasterEgg || 0;
     }
-
 }
 
 export const transferUserDataFromOldUsersJson = () => {
@@ -101,6 +102,10 @@ export const redeemUsernamePassword = async (id, login, password) => {
     let rateLimit = isRateLimited("auth.riotgames.com");
     if(rateLimit) return {success: false, rateLimit: rateLimit};
 
+    const proxyManager = getProxyManager();
+    const proxy = await proxyManager.getProxy("auth.riotgames.com");
+    const agent = await proxy?.createAgent("auth.riotgames.com");
+
     // prepare cookies for auth request
     const req1 = await fetch("https://auth.riotgames.com/api/v1/authorization", {
         method: "POST",
@@ -118,12 +123,15 @@ export const redeemUsernamePassword = async (id, login, password) => {
             "redirect_uri": "http://localhost/redirect",
             "response_type": "token id_token",
             "scope": "openid link ban lol_region"
-        })
+        }),
+        proxy: agent
     });
     console.assert(req1.statusCode === 200, `Auth Request Cookies status code is ${req1.statusCode}!`, req1);
 
     rateLimit = checkRateLimit(req1, "auth.riotgames.com");
     if(rateLimit) return {success: false, rateLimit: rateLimit};
+
+    if(detectCloudflareBlock(req1)) return {success: false, rateLimit: "cloudflare"};
 
     let cookies = parseSetCookie(req1.headers["set-cookie"]);
 
@@ -140,12 +148,15 @@ export const redeemUsernamePassword = async (id, login, password) => {
             'username': login,
             'password': password,
             'remember': true
-        })
+        }),
+        proxy: agent
     });
     console.assert(req2.statusCode === 200, `Auth status code is ${req2.statusCode}!`, req2);
 
     rateLimit = checkRateLimit(req2, "auth.riotgames.com")
     if(rateLimit) return {success: false, rateLimit: rateLimit};
+
+    if(detectCloudflareBlock(req2)) return {success: false, rateLimit: "cloudflare"};
 
     cookies = {
         ...cookies,
@@ -234,6 +245,12 @@ export const redeem2FACode = async (id, code) => {
 const processAuthResponse = async (id, authData, redirect, user=null) => {
     if(!user) user = new User({id});
     const [rso, idt] = extractTokensFromUri(redirect);
+    if(rso == null) {
+        console.error("Riot servers didn't return an RSO token!");
+        console.error("Most likely the Cloudflare firewall is blocking your IP address. Try hosting on your home PC and seeing if the issue still happens.");
+        throw "Riot servers didn't return an RSO token!";
+    }
+
     user.auth = {
         ...user.auth,
         rso: rso,
@@ -336,6 +353,8 @@ export const redeemCookies = async (id, cookies) => {
     rateLimit = checkRateLimit(req, "auth.riotgames.com");
     if(rateLimit) return {success: false, rateLimit: rateLimit};
 
+    if(detectCloudflareBlock(req)) return {success: false, rateLimit: "cloudflare"};
+
     if(req.headers.location.startsWith("/login")) return {success: false}; // invalid cookies
 
     cookies = {
@@ -350,6 +369,7 @@ export const redeemCookies = async (id, cookies) => {
 }
 
 export const refreshToken = async (id, account=null) => {
+    console.log(`Refreshing token for ${id}...`)
     let response = {success: false}
 
     let user = getUser(id, account);
@@ -371,21 +391,51 @@ export const refreshToken = async (id, account=null) => {
 
 let riotClientVersion;
 let userAgentFetchPromise;
-export const fetchRiotClientVersion = async () => {
+export const fetchRiotClientVersion = async (attempt=1) => {
     if(userAgentFetchPromise) return userAgentFetchPromise;
 
     let resolve;
-    if(userAgentFetchPromise !== null) {
+    if(!userAgentFetchPromise) {
         console.log("Fetching latest Riot user-agent..."); // only log it the first time
         userAgentFetchPromise = new Promise(r => resolve = r);
     }
 
-    const githubReq = await fetch("https://api.github.com/repos/Morilli/riot-manifests/contents/Riot%20Client/KeystoneFoundationLiveWin?ref=master", {
-        headers: {"User-Agent": "giorgi-o/skinpeek"}
-    });
-    const json = JSON.parse(githubReq.body);
+    const headers = {
+        "User-Agent": "giorgi-o/skinpeek",
+        "X-GitHub-Api-Version": "2022-11-28",
+    };
+    if(config.githubToken) headers["Authorization"] = `Bearer ${config.githubToken}`;
 
-    const versions = json.map(file => file.name.split('_')[0]);
+    const githubReq = await fetch("https://api.github.com/repos/Morilli/riot-manifests/contents/Riot%20Client/KeystoneFoundationLiveWin?ref=master", {
+        headers
+    });
+
+    let json, versions, error = false;
+    try {
+        if(githubReq.statusCode !== 200) error = true;
+        else {
+            json = JSON.parse(githubReq.body);
+            versions = json.map(file => file.name.split('_')[0]);
+        }
+    } catch(e) {
+        error = true
+    }
+
+    if(error) {
+        if(attempt === 3) {
+            console.error("Failed to fetch latest Riot user-agent! (tried 3 times)");
+
+            const fallbackVersion = "65.0.2.5073401";
+            console.error(`Using version number ${fallbackVersion} instead...`);
+        }
+
+        console.error(`Failed to fetch latest Riot user-agent! (try ${attempt}/3`);
+        console.error(githubReq);
+
+        await wait(1000);
+        return fetchRiotClientVersion(attempt + 1);
+    }
+
     const compareVersions = (a, b) => {
         const aSplit = a.split(".");
         const bSplit = b.split(".");
@@ -399,12 +449,25 @@ export const fetchRiotClientVersion = async () => {
 
     riotClientVersion = versions[0];
     userAgentFetchPromise = null;
-    resolve();
+    resolve?.();
 }
 
 const getUserAgent = async () => {
+    // temporary bypass for Riot adding hCaptcha (see github issue #93)
+    return "ShooterGame/11 Windows/10.0.22621.1.768.64bit";
+    
     if(!riotClientVersion) await fetchRiotClientVersion();
     return `RiotClient/${riotClientVersion}.1234567 rso-auth (Windows;10;;Professional, x64)`;
+}
+
+const detectCloudflareBlock = (req) => {
+    const blocked = req.statusCode === 403 && req.headers["x-frame-options"] === "SAMEORIGIN";
+
+    if(blocked) {
+        console.error("[ !!! ] Error 1020: Your bot might be rate limited, it's best to check if your IP address/your hosting service is blocked by Riot - try hosting on your own PC to see if it solves the issue?")
+    }
+
+    return blocked;
 }
 
 export const deleteUserAuth = (user) => {

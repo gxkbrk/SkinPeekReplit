@@ -9,6 +9,9 @@ const VPEmojiFilename = "assets/vp.png"; // https://media.valorant-api.com/curre
 const RadEmojiName = "RadianiteIcon";
 const RadEmojiFilename = "assets/rad.png"; // https://media.valorant-api.com/currencies/e59aa87c-4cbf-517a-5983-6e81511be9b7/displayicon.png
 
+const KCEmojiName = "KingdomCreditIcon";
+const KCEmojiFilename = "assets/kc.png"; // https://media.valorant-api.com/currencies/85ca954a-41f2-ce94-9b45-8ca3dd39a00d/displayicon.png
+
 // the timestamp of the last time the emoji cache was updated for each guild
 const lastEmojiFetch = {};
 
@@ -17,6 +20,7 @@ const emojiCache = {};
 
 export const VPEmoji = async (interaction, channel=interaction.channel) => emojiToString(await getOrCreateEmoji(channel, VPEmojiName, VPEmojiFilename)) || s(interaction).info.PRICE;
 export const RadEmoji = async (interaction, channel=interaction.channel) => emojiToString(await getOrCreateEmoji(channel, RadEmojiName, RadEmojiFilename));
+export const KCEmoji = async (interaction, channel=interaction.channel) => emojiToString(await getOrCreateEmoji(channel, KCEmojiName, KCEmojiFilename));
 
 export const rarityEmoji = async (channel, name, icon) => emojiToString(await getOrCreateEmoji(channel, `${name}Rarity`, icon));
 
@@ -77,7 +81,8 @@ const createEmoji = async (guild, name, filenameOrUrl) => {
 
     console.log(`Uploading emoji ${name} in ${guild.name}...`);
     try {
-        return await guild.emojis.create(await resolveFilenameOrUrl(filenameOrUrl), name);
+        const attachment = await resolveFilenameOrUrl(filenameOrUrl)
+        return await guild.emojis.create({name, attachment});
     } catch(e) {
         console.error(`Could not create ${name} emoji in ${guild.name}! Either I don't have the right role or there are no more emoji slots`);
         console.error(`${e.name}: ${e.message}`);

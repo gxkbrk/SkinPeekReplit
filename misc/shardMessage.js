@@ -1,4 +1,4 @@
-import {checkAlerts, sendAlert, sendCredentialsExpired} from "../discord/alerts.js";
+import {checkAlerts, sendAlert, sendCredentialsExpired, sendDailyShop} from "../discord/alerts.js";
 import {loadConfig} from "./config.js";
 import {client, destroyTasks, scheduleTasks} from "../discord/bot.js";
 import {addMessagesToLog, localLog} from "./logger.js";
@@ -31,6 +31,9 @@ const receiveShardMessage = async (message) => {
     //oldLog(`Received shard message ${JSON.stringify(message).substring(0, 100)}`);
     switch(message.type) {
         case "shardsReady":
+            // also received when a shard dies and respawns
+            if(allShardsReadyPromise === null) return;
+
             localLog(`All shards are ready!`);
             allShardsReadyPromise = null;
             allShardsReadyCb();
@@ -42,7 +45,10 @@ const receiveShardMessage = async (message) => {
             await handleMQResponse(message);
             break;
         case "alert":
-            await sendAlert(message.id, message.account, message.alerts, message.expires, false);
+            await sendAlert(message.id, message.account, message.alerts, message.expires, false, message.alertsLength);
+            break;
+        case "dailyShop":
+            await sendDailyShop(message.id, message.shop, message.channelId, message.valorantUser, false);
             break;
         case "credentialsExpired":
             await sendCredentialsExpired(message.id, message.alert, false);

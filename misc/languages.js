@@ -1,6 +1,6 @@
 import fs from "fs";
+import {BaseInteraction} from "discord.js";
 import {getSetting} from "./settings.js";
-import {Interaction} from "discord.js";
 import {getUser, User} from "../valorant/auth.js";
 import config from "./config.js";
 
@@ -103,8 +103,8 @@ const importLanguage = (language) => {
 importLanguage(DEFAULT_LANG);
 
 // format a string
-String.prototype.f = function(args, interactionOrId=null) {
-    args = hideUsername(args, interactionOrId);
+String.prototype.f = function(args, interactionOrId=null, hideName=true) {
+    args = hideUsername(args, interactionOrId, hideName);
     let str = this;
     for(let i in args)
         str = str.replace(`{${i}}`, args[i]);
@@ -113,7 +113,7 @@ String.prototype.f = function(args, interactionOrId=null) {
 
 // get the strings for a language
 export const s = (input) => {
-    const discLang = resolveDiscordLanguage(input);
+    const discLang = config.localiseText ? resolveDiscordLanguage(input) : DEFAULT_LANG;
 
     if(!languages[discLang]) importLanguage(discLang);
     return languages[discLang] || languages[DEFAULT_LANG];
@@ -121,7 +121,7 @@ export const s = (input) => {
 
 // get the skin/bundle name in a language
 export const l = (names, input) => {
-    let discLocale = resolveDiscordLanguage(input);
+    let discLocale = config.localiseSkinNames ? resolveDiscordLanguage(input) : DEFAULT_LANG;
     let valLocale = discToValLang[discLocale];
     return names[valLocale] || names[DEFAULT_VALORANT_LANG];
 }
@@ -137,23 +137,20 @@ const resolveDiscordLanguage = (input) => {
         else discLang = input;
     }
     if(input instanceof User) discLang = getSetting(input.id, 'locale');
-    if(input instanceof Interaction) discLang = getSetting(input.user.id, 'locale');
+    if(input instanceof BaseInteraction) discLang = getSetting(input.user.id, 'locale');
 
-    if(discLang === "Automatic") {
-        if(config.localiseSkinNames) discLang = input.locale;
-        else discLang = DEFAULT_LANG;
-    }
+    if(discLang === "Automatic") discLang = input.locale;
     if(!discLang) discLang = DEFAULT_LANG;
 
     return discLang;
 }
 
-const hideUsername = (args, interactionOrId) => {
+export const hideUsername = (args, interactionOrId, hideName = true) => {
     if(!args.u) return {...args, u: s(interactionOrId).info.NO_USERNAME};
     if(!interactionOrId) return args;
 
     const id = typeof interactionOrId === 'string' ? interactionOrId : interactionOrId.user.id;
-    const hide = getSetting(id, 'hideIgn');
+    const hide = hideName ? getSetting(id, 'hideIgn') : false;
     if(!hide) return args;
 
     return {...args, u: `||*${s(interactionOrId).info.HIDDEN_USERNAME}*||`};

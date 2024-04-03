@@ -7,11 +7,16 @@ import {DEFAULT_VALORANT_LANG, discToValLang} from "../misc/languages.js";
 import {client} from "../discord/bot.js";
 import {sendShardMessage} from "../misc/shardMessage.js";
 
-const formatVersion = 9;
+const formatVersion = 13;
 let gameVersion;
 
 let weapons, skins, rarities, buddies, sprays, cards, titles, bundles, battlepass;
 let prices = {timestamp: null};
+
+export const clearCache = () => {
+    weapons = skins = rarities = buddies = sprays = cards = titles = bundles = battlepass = null;
+    prices = {timestamp: null};
+}
 
 export const getValorantVersion = async () => {
     console.log("Fetching current valorant version...");
@@ -97,31 +102,33 @@ export const getSkinList = async (gameVersion) => {
             uuid: weapon.uuid,
             names: weapon.displayName,
             icon: weapon.displayIcon,
+            defaultSkinUuid: weapon.defaultSkinUuid,
         }
         for(const skin of weapon.skins) {
             const levelOne = skin.levels[0];
 
-          let icon;
-          if (skin.themeUuid === "5a629df4-4765-0214-bd40-fbb96542941f") {
-              icon = skin.chromas[0] && skin.chromas[0].fullRender;
-          } else {
-              for (let i = 0; i < skin.levels.length; i++) {
-                  if (skin.levels[i] && skin.levels[i].displayIcon) {
-                      icon = skin.levels[i].displayIcon;
-                      break;
-                  }
-              }
-          }
-          
-          if(!icon) icon = null;
-
-
+            let icon;
+            if (skin.themeUuid === "5a629df4-4765-0214-bd40-fbb96542941f") { // default skins
+                icon = skin.chromas[0] && skin.chromas[0].fullRender;
+            } else {
+                for (let i = 0; i < skin.levels.length; i++) {
+                    if (skin.levels[i] && skin.levels[i].displayIcon) {
+                        icon = skin.levels[i].displayIcon;
+                        break;
+                    }
+                }
+            }
+            if(!icon) icon = null;
             skins[levelOne.uuid] = {
                 uuid: levelOne.uuid,
                 skinUuid: skin.uuid,
+                weapon: weapon.uuid,
                 names: skin.displayName,
                 icon: icon,
-                rarity: skin.contentTierUuid
+                rarity: skin.contentTierUuid,
+                defaultSkinUuid: weapon.defaultSkinUuid,
+                levels: skin.levels,
+                chromas: skin.chromas,
             }
         }
     }
@@ -195,11 +202,12 @@ const getBundleList = async (gameVersion) => {
             names: bundle.displayName,
             subNames: bundle.displayNameSubText,
             descriptions: bundle.extraDescription,
-            icon: bundle.displayIcon2,
+            icon: bundle.displayIcon,
             items: null,
             price: null,
             basePrice: null,
-            expires: null
+            expires: null,
+            last_seen: null
         }
     }
 
@@ -249,6 +257,7 @@ const getBundleList = async (gameVersion) => {
                 });
 
             bundle.items = items;
+            bundle.last_seen = bundleData.last_seen
             bundle.price = bundleData.price;
         }
     }
@@ -396,26 +405,53 @@ export const getTitles = async (gameVersion) => {
 export const fetchBattlepassInfo = async (gameVersion) => {
     console.log("Fetching battlepass UUID and end date...");
 
-    // current season & end date
+    // terminology for this function:
+    // act = one in-game period with one battlepass, usually around 2 months
+    // episode = 3 acts
+    // season = both act and episode. basically any "event" with a start and end date.
+
+    // fetch seasons data (current act end date)
     const req1 = await fetch("https://valorant-api.com/v1/seasons");
     console.assert(req1.statusCode === 200, `Valorant seasons status code is ${req1.statusCode}!`, req1);
 
-    const json1 = JSON.parse(req1.body);
-    console.assert(json1.status === 200, `Valorant seasons data status code is ${json1.status}!`, json1);
+    const seasons_json = JSON.parse(req1.body);
+    console.assert(seasons_json.status === 200, `Valorant seasons data status code is ${seasons_json.status}!`, seasons_json);
 
-    // battlepass uuid
+    // fetch battlepass data (battlepass uuid)
     const req2 = await fetch("https://valorant-api.com/v1/contracts");
     console.assert(req2.statusCode === 200, `Valorant contracts status code is ${req2.statusCode}!`, req2);
 
-    const json2 = JSON.parse(req2.body);
-    console.assert(json2.status === 200, `Valorant contracts data status code is ${json2.status}!`, json2);
+    const contracts_json = JSON.parse(req2.body);
+    console.assert(contracts_json.status === 200, `Valorant contracts data status code is ${contracts_json.status}!`, contracts_json);
 
-    // find current season
-    const now = Date.now();
-    const currentSeason = json1.data.find(season => season.type === "EAresSeasonType::Act" && new Date(season.startTime) < now && new Date(season.endTime) > now);
+    // we need to find the "current battlepass season" i.e. the last season to have a battlepass.
+    // it's not always the current season, since between acts there is sometimes a period during
+    // server maintenance where the new act has started but there is no battlepass contract for it yet.
 
-    // find current battlepass
-    const currentBattlepass = json2.data.find(contract => contract.content.relationUuid === currentSeason.uuid);
+    // get all acts
+    // const seasonUuids = seasons_json.data.filter(season => season.type === "EAresSeasonType::Act").map(season => season.uuid);
+    const all_acts = seasons_json.data.filter(season => season.type === "EAresSeasonType::Act");
+    // sort them by start date (oldest first)
+    all_acts.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+    // and reverse
+    all_acts.reverse();
+    // we sort then reverse instead of just sorting the other way round directly, because most likely
+    // the acts are already sorted beforehand, so this is more efficient.
+
+    // get all battlepass contracts
+    const all_bp_contracts = contracts_json.data.filter(contract => contract.content.relationType === "Season");
+
+    // find the last act that has a battlepass
+    let currentSeason = null;
+    let currentBattlepass = null;
+    for(const act of all_acts) {
+        const bp_contract = all_bp_contracts.find(contract => contract.content.relationUuid === act.uuid);
+        if(bp_contract) {
+            currentSeason = act;
+            currentBattlepass = bp_contract;
+            break;
+        }
+    }
 
     // save data
     battlepass = {
