@@ -1,3 +1,7 @@
+# You'll have to change some files. A tutorial on how to setup the bot: https://youtu.be/QurxfgObYT8
+
+# Useful links: [UptimeDoctor](https://www.uptimedoctor.com/en/signup.php)
+
 <hr>
 
 <h1 align="center">SkinPeek</h1>
