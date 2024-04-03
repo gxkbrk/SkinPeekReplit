@@ -1,6 +1,4 @@
-# You'll have to change some files. A tutorial on how to setup the bot: https://youtu.be/QurxfgObYT8
-
-# Useful links: [UptimeDoctor](https://www.uptimedoctor.com/en/signup.php)
+# The Replit version of SkinPeek has sadly been discontinued due to Replit changing their webserver host from free to paid. Big shoutout though to [giorgi-o](https://github.com/giorgi-o) for creating such a cool bot.
 
 <hr>
 
